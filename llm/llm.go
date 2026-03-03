@@ -25,6 +25,20 @@ type Service interface {
 	MaxImageDimension() int
 }
 
+// StreamingService is an optional interface for services that support streaming responses.
+// Services implementing this interface will have their responses streamed to the UI in real-time.
+type StreamingService interface {
+	Service
+	DoStream(ctx context.Context, req *Request, onText func(text string)) (*Response, error)
+}
+
+// ThinkingStreamingService is an optional interface for services that can stream
+// both normal text and reasoning/thinking updates.
+type ThinkingStreamingService interface {
+	StreamingService
+	DoStreamWithThinking(ctx context.Context, req *Request, onText func(text string), onThinking func(text string)) (*Response, error)
+}
+
 type SimplifiedPatcher interface {
 	// UseSimplifiedPatch reports whether the service should use the simplified patch input schema.
 	UseSimplifiedPatch() bool
@@ -155,9 +169,10 @@ type Content struct {
 	MediaType string
 
 	// for thinking
-	Thinking  string
-	Data      string
-	Signature string
+	Thinking        string
+	ThinkingSummary string // optional short summary (collapsed view)
+	Data            string
+	Signature       string
 
 	// for tool_use
 	ToolName  string
@@ -325,6 +340,7 @@ type Usage struct {
 	CacheCreationInputTokens uint64     `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     uint64     `json:"cache_read_input_tokens"`
 	OutputTokens             uint64     `json:"output_tokens"`
+	ReasoningTokens          uint64     `json:"reasoning_tokens,omitempty"`
 	CostUSD                  float64    `json:"cost_usd"`
 	Model                    string     `json:"model,omitempty"`
 	StartTime                *time.Time `json:"start_time,omitempty"`
@@ -336,11 +352,12 @@ func (u *Usage) Add(other Usage) {
 	u.CacheCreationInputTokens += other.CacheCreationInputTokens
 	u.CacheReadInputTokens += other.CacheReadInputTokens
 	u.OutputTokens += other.OutputTokens
+	u.ReasoningTokens += other.ReasoningTokens
 	u.CostUSD += other.CostUSD
 }
 
 func (u *Usage) String() string {
-	return fmt.Sprintf("in: %d, out: %d", u.InputTokens, u.OutputTokens)
+	return fmt.Sprintf("in: %d, out: %d, reasoning: %d", u.InputTokens, u.OutputTokens, u.ReasoningTokens)
 }
 
 // TotalInputTokens returns the total number of input tokens including cached tokens.
@@ -369,6 +386,7 @@ func (u *Usage) Attr() slog.Attr {
 		slog.Uint64("output_tokens", u.OutputTokens),
 		slog.Uint64("cache_creation_input_tokens", u.CacheCreationInputTokens),
 		slog.Uint64("cache_read_input_tokens", u.CacheReadInputTokens),
+		slog.Uint64("reasoning_tokens", u.ReasoningTokens),
 		slog.Float64("cost_usd", u.CostUSD),
 	)
 }
