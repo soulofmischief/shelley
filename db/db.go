@@ -1120,3 +1120,41 @@ func (db *DB) GetAllSettings(ctx context.Context) (map[string]string, error) {
 	}
 	return settings, nil
 }
+
+// GetOAuthCredentials retrieves OAuth credentials for a provider
+func (db *DB) GetOAuthCredentials(ctx context.Context, provider string) (*generated.OauthCredential, error) {
+	var cred generated.OauthCredential
+	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
+		q := generated.New(rx.Conn())
+		var err error
+		cred, err = q.GetOAuthCredentials(ctx, provider)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &cred, nil
+}
+
+// UpsertOAuthCredentials creates or updates OAuth credentials for a provider
+func (db *DB) UpsertOAuthCredentials(ctx context.Context, params generated.UpsertOAuthCredentialsParams) (*generated.OauthCredential, error) {
+	var cred generated.OauthCredential
+	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		q := generated.New(tx.Conn())
+		var err error
+		cred, err = q.UpsertOAuthCredentials(ctx, params)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &cred, nil
+}
+
+// DeleteOAuthCredentials deletes OAuth credentials for a provider
+func (db *DB) DeleteOAuthCredentials(ctx context.Context, provider string) error {
+	return db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		q := generated.New(tx.Conn())
+		return q.DeleteOAuthCredentials(ctx, provider)
+	})
+}

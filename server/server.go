@@ -301,6 +301,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// Models API (dynamic list refresh)
 	mux.Handle("/api/models", http.HandlerFunc(s.handleModels))
 
+	// Codex OAuth
+	mux.Handle("/api/codex-auth/status", http.HandlerFunc(s.handleCodexAuthStatus))
+	mux.Handle("/api/codex-auth/pkce/start", http.HandlerFunc(s.handleCodexPkceStart))
+	mux.Handle("/api/codex-auth/pkce/complete", http.HandlerFunc(s.handleCodexPkceComplete))
+	mux.Handle("/api/codex-auth/logout", http.HandlerFunc(s.handleCodexLogout))
+
 	// Version endpoints
 	mux.Handle("GET /version", http.HandlerFunc(s.handleVersion))
 	mux.Handle("GET /version-check", http.HandlerFunc(s.handleVersionCheck))

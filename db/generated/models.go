@@ -78,6 +78,16 @@ type NotificationChannel struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+type OauthCredential struct {
+	Provider     string    `json:"provider"`
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	AccountID    *string   `json:"account_id"`
+	ExpiresAt    int64     `json:"expires_at"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 type Setting struct {
 	Key       string    `json:"key"`
 	Value     string    `json:"value"`
