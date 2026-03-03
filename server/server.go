@@ -75,6 +75,10 @@ type StreamResponse struct {
 	Heartbeat bool `json:"heartbeat,omitempty"`
 	// NotificationEvent is set when a notification-worthy event occurs (e.g. agent finished).
 	NotificationEvent *notifications.Event `json:"notification_event,omitempty"`
+	// StreamingText is a delta of text content being streamed from the LLM.
+	StreamingText string `json:"streaming_text,omitempty"`
+	// StreamingThinking is a delta of thinking/reasoning content being streamed.
+	StreamingThinking string `json:"streaming_thinking,omitempty"`
 }
 
 // LLMProvider is an interface for getting LLM services

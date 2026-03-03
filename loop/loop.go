@@ -35,6 +35,12 @@ type Config struct {
 	// If set, this is called at end of turn to check for git state changes.
 	// If nil, Config.WorkingDir is used as a static value.
 	GetWorkingDir func() string
+	// OnStreamText is called with partial text as it streams from the LLM.
+	// Only used if the LLM service implements llm.StreamingService.
+	OnStreamText func(text string)
+	// OnStreamThinking is called with partial thinking as it streams from the LLM.
+	// Only used if the LLM service implements llm.ThinkingStreamingService.
+	OnStreamThinking func(text string)
 }
 
 // Loop manages a conversation turn with an LLM including tool execution and message recording.
@@ -53,6 +59,8 @@ type Loop struct {
 	onGitStateChange GitStateChangeFunc
 	getWorkingDir    func() string
 	lastGitState     *gitstate.GitState
+	onStreamText     func(string)
+	onStreamThinking func(string)
 }
 
 // NewLoop creates a new Loop instance with the provided configuration
@@ -81,6 +89,8 @@ func NewLoop(config Config) *Loop {
 		onGitStateChange: config.OnGitStateChange,
 		getWorkingDir:    config.GetWorkingDir,
 		lastGitState:     initialGitState,
+		onStreamText:     config.OnStreamText,
+		onStreamThinking: config.OnStreamThinking,
 	}
 }
 
@@ -253,8 +263,21 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 		const maxRetries = 2
 		var resp *llm.Response
 		var err error
+
+		// Check if service supports streaming and we have a callback
+		streamingSvc, canStream := llmService.(llm.StreamingService)
+		thinkingStreamingSvc, canStreamThinking := llmService.(llm.ThinkingStreamingService)
+		onStreamText := l.onStreamText
+		onStreamThinking := l.onStreamThinking
+
 		for attempt := 1; attempt <= maxRetries; attempt++ {
-			resp, err = llmService.Do(llmCtx, req)
+			if canStreamThinking && onStreamText != nil && onStreamThinking != nil {
+				resp, err = thinkingStreamingSvc.DoStreamWithThinking(llmCtx, req, onStreamText, onStreamThinking)
+			} else if canStream && onStreamText != nil {
+				resp, err = streamingSvc.DoStream(llmCtx, req, onStreamText)
+			} else {
+				resp, err = llmService.Do(llmCtx, req)
+			}
 			if err == nil {
 				break
 			}

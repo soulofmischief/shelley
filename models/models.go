@@ -2,15 +2,19 @@ package models
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/ant"
+	"shelley.exe.dev/llm/codex"
 	"shelley.exe.dev/llm/gem"
 	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/llm/oai"
@@ -508,6 +512,63 @@ func (l *loggingService) UseSimplifiedPatch() bool {
 	return false
 }
 
+// DoStream delegates to the underlying service if it supports streaming.
+func (l *loggingService) DoStream(ctx context.Context, request *llm.Request, onText func(string)) (*llm.Response, error) {
+	return l.DoStreamWithThinking(ctx, request, onText, nil)
+}
+
+// DoStreamWithThinking delegates to the underlying service if it supports streaming.
+func (l *loggingService) DoStreamWithThinking(ctx context.Context, request *llm.Request, onText func(string), onThinking func(string)) (*llm.Response, error) {
+	start := time.Now()
+
+	// Add model ID and provider to context for the HTTP transport
+	ctx = llmhttp.WithModelID(ctx, l.modelID)
+	ctx = llmhttp.WithProvider(ctx, string(l.provider))
+
+	var (
+		response *llm.Response
+		err      error
+	)
+
+	if thinkingSvc, ok := l.service.(llm.ThinkingStreamingService); ok {
+		response, err = thinkingSvc.DoStreamWithThinking(ctx, request, onText, onThinking)
+	} else if streamingSvc, ok := l.service.(llm.StreamingService); ok {
+		response, err = streamingSvc.DoStream(ctx, request, onText)
+	} else {
+		response, err = l.service.Do(ctx, request)
+	}
+
+	duration := time.Since(start)
+	durationSeconds := duration.Seconds()
+
+	if err != nil {
+		l.logger.Error("LLM streaming request failed",
+			"model", l.modelID,
+			"duration_seconds", durationSeconds,
+			"error", err)
+	} else {
+		logAttrs := []any{
+			"model", l.modelID,
+			"duration_seconds", durationSeconds,
+			"streaming", true,
+		}
+		if response != nil && !response.Usage.IsZero() {
+			logAttrs = append(logAttrs,
+				"input_tokens", response.Usage.InputTokens,
+				"output_tokens", response.Usage.OutputTokens,
+				"cost_usd", response.Usage.CostUSD,
+			)
+		}
+		l.logger.Info("LLM streaming request completed", logAttrs...)
+	}
+
+	return response, err
+}
+
+// Verify loggingService implements streaming interfaces.
+var _ llm.StreamingService = (*loggingService)(nil)
+var _ llm.ThinkingStreamingService = (*loggingService)(nil)
+
 // NewManager creates a new Manager with all models configured
 func NewManager(cfg *Config) (*Manager, error) {
 	manager := &Manager{
@@ -770,10 +831,60 @@ func (m *Manager) createServiceFromModel(model *generated.Model) llm.Service {
 			Model:  model.ModelName,
 			HTTPC:  m.httpc,
 		}
+	case "codex":
+		return m.createCodexService(model)
 	default:
 		if m.logger != nil {
 			m.logger.Error("Unknown provider type for model", "model_id", model.ModelID, "provider_type", model.ProviderType)
 		}
 		return nil
+	}
+}
+
+// createCodexService creates a Codex service using OAuth credentials from the database
+func (m *Manager) createCodexService(model *generated.Model) llm.Service {
+	if m.db == nil {
+		if m.logger != nil {
+			m.logger.Error("Cannot create codex service without database")
+		}
+		return nil
+	}
+
+	cred, err := m.db.GetOAuthCredentials(context.Background(), "codex")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			if m.logger != nil {
+				m.logger.Debug("Codex not authenticated, skipping model", "model_id", model.ModelID)
+			}
+			return nil
+		}
+		if m.logger != nil {
+			m.logger.Error("Failed to get codex credentials", "error", err)
+		}
+		return nil
+	}
+
+	thinkingLevel := llm.ThinkingLevelMedium
+	switch {
+	case strings.Contains(model.ModelName, "thinking-low"):
+		thinkingLevel = llm.ThinkingLevelLow
+	case strings.Contains(model.ModelName, "thinking-high"):
+		thinkingLevel = llm.ThinkingLevelHigh
+	case strings.Contains(model.ModelName, "thinking-medium"):
+		thinkingLevel = llm.ThinkingLevelMedium
+	}
+
+	accountID := ""
+	if cred.AccountID != nil {
+		accountID = *cred.AccountID
+	}
+
+	return &codex.Service{
+		AccessToken:   cred.AccessToken,
+		AccountID:     accountID,
+		Model:         model.ModelName,
+		MaxTokens:     int(model.MaxTokens),
+		HTTPC:         m.httpc,
+		ThinkingLevel: thinkingLevel,
 	}
 }

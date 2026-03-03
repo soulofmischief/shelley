@@ -477,6 +477,16 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 		OnGitStateChange: func(ctx context.Context, state *gitstate.GitState) {
 			cm.recordGitStateChange(ctx, state)
 		},
+		OnStreamText: func(text string) {
+			cm.subpub.Broadcast(StreamResponse{
+				StreamingText: text,
+			})
+		},
+		OnStreamThinking: func(text string) {
+			cm.subpub.Broadcast(StreamResponse{
+				StreamingThinking: text,
+			})
+		},
 	})
 
 	cm.mu.Lock()

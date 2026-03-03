@@ -106,15 +106,21 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate required fields
-	if req.DisplayName == "" || req.ProviderType == "" || req.Endpoint == "" || req.APIKey == "" || req.ModelName == "" {
-		http.Error(w, "display_name, provider_type, endpoint, api_key, and model_name are required", http.StatusBadRequest)
+	// Validate required fields (api_key not required for codex provider)
+	if req.DisplayName == "" || req.ProviderType == "" || req.Endpoint == "" || req.ModelName == "" {
+		http.Error(w, "display_name, provider_type, endpoint, and model_name are required", http.StatusBadRequest)
+		return
+	}
+
+	// api_key is required for non-codex providers
+	if req.ProviderType != "codex" && req.APIKey == "" {
+		http.Error(w, "api_key is required for this provider type", http.StatusBadRequest)
 		return
 	}
 
 	// Validate provider type
-	if req.ProviderType != "anthropic" && req.ProviderType != "openai" && req.ProviderType != "openai-responses" && req.ProviderType != "gemini" {
-		http.Error(w, "provider_type must be 'anthropic', 'openai', 'openai-responses', or 'gemini'", http.StatusBadRequest)
+	if req.ProviderType != "anthropic" && req.ProviderType != "openai" && req.ProviderType != "openai-responses" && req.ProviderType != "gemini" && req.ProviderType != "codex" {
+		http.Error(w, "provider_type must be 'anthropic', 'openai', 'openai-responses', 'gemini', or 'codex'", http.StatusBadRequest)
 		return
 	}
 

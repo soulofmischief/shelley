@@ -59,6 +59,40 @@ func (s *PredictableService) MaxImageDimension() int {
 	return 2000
 }
 
+// DoStream delegates to DoStreamWithThinking.
+func (s *PredictableService) DoStream(ctx context.Context, req *llm.Request, onText func(string)) (*llm.Response, error) {
+	return s.DoStreamWithThinking(ctx, req, onText, nil)
+}
+
+// DoStreamWithThinking streams predictable thinking/text chunks before returning the full response.
+func (s *PredictableService) DoStreamWithThinking(ctx context.Context, req *llm.Request, onText func(string), onThinking func(string)) (*llm.Response, error) {
+	resp, err := s.Do(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, content := range resp.Content {
+		switch content.Type {
+		case llm.ContentTypeThinking:
+			streamPredictableChunks(content.Thinking, onThinking)
+		case llm.ContentTypeText:
+			streamPredictableChunks(content.Text, onText)
+		}
+	}
+
+	return resp, nil
+}
+
+func streamPredictableChunks(text string, onChunk func(string)) {
+	if onChunk == nil || text == "" {
+		return
+	}
+
+	for _, word := range strings.Fields(text) {
+		onChunk(word + " ")
+	}
+}
+
 // Do processes a request and returns a predictable response based on the input text
 func (s *PredictableService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
 	// Store request for testing inspection
