@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"shelley.exe.dev/llm"
@@ -601,5 +602,179 @@ func TestResponsesServiceDoWithCaching(t *testing.T) {
 	// ContextWindowUsed = 100 + 50 = 150
 	if resp.Usage.ContextWindowUsed() != 150 {
 		t.Errorf("resp.Usage.ContextWindowUsed() = %d, expected 150", resp.Usage.ContextWindowUsed())
+	}
+}
+
+func TestParseSSEStream(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"type":"response.output_item.added","item":{"type":"reasoning","id":"rs-1","summary":[]}}`,
+		`data: {"type":"response.reasoning_summary_part.added","summary_index":0}`,
+		`data: {"type":"response.reasoning_summary_text.delta","delta":"Thinking "}`,
+		`data: {"type":"response.reasoning_summary_text.delta","delta":"hard."}`,
+		`data: {"type":"response.output_item.done","item":{"type":"reasoning","id":"rs-1","summary":[{"type":"summary_text","text":"Thinking hard."}]}}`,
+		`data: {"type":"response.output_text.delta","delta":"Hello "}`,
+		`data: {"type":"response.output_text.delta","delta":"world."}`,
+		`data: {"type":"response.completed","response":{"id":"resp-1","output":[],"usage":{"input_tokens":10,"output_tokens":5,"output_tokens_details":{"reasoning_tokens":8}}}}`,
+		"",
+	}, "\n")
+
+	var textChunks, thinkingChunks []string
+	resp, err := parseSSEStream(
+		strings.NewReader(sse),
+		func(s string) { textChunks = append(textChunks, s) },
+		func(s string) { thinkingChunks = append(thinkingChunks, s) },
+	)
+	if err != nil {
+		t.Fatalf("parseSSEStream: %v", err)
+	}
+
+	if got := strings.Join(textChunks, ""); got != "Hello world." {
+		t.Errorf("text stream = %q, want %q", got, "Hello world.")
+	}
+	if got := strings.Join(thinkingChunks, ""); got != "Thinking hard." {
+		t.Errorf("thinking stream = %q, want %q", got, "Thinking hard.")
+	}
+
+	// Verify reasoning item was assembled
+	var hasReasoning bool
+	for _, item := range resp.Output {
+		if item.Type == "reasoning" {
+			hasReasoning = true
+			if len(item.Summary) == 0 || item.Summary[0] != "Thinking hard." {
+				t.Errorf("reasoning summary = %v, want [Thinking hard.]", item.Summary)
+			}
+		}
+	}
+	if !hasReasoning {
+		t.Error("expected reasoning item in output")
+	}
+
+	// Verify usage includes reasoning tokens
+	if resp.Usage.OutputTokensDetails == nil {
+		t.Fatal("expected OutputTokensDetails to be set")
+	}
+	if resp.Usage.OutputTokensDetails.ReasoningTokens != 8 {
+		t.Errorf("reasoning_tokens = %d, want 8", resp.Usage.OutputTokensDetails.ReasoningTokens)
+	}
+}
+
+func TestParseSSEStreamError(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"type":"response.failed","response":{"error":{"code":"rate_limit","message":"slow down"}}}`,
+		"",
+	}, "\n")
+
+	_, err := parseSSEStream(strings.NewReader(sse), nil, nil)
+	if err == nil {
+		t.Fatal("expected error from response.failed")
+	}
+	if !strings.Contains(err.Error(), "rate_limit") {
+		t.Errorf("error = %v, want to contain rate_limit", err)
+	}
+}
+
+func TestResponsesServiceDoStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify streaming was requested
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["stream"] != true {
+			t.Error("expected stream=true in request body")
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, line := range []string{
+			`data: {"type":"response.output_text.delta","delta":"Hi "}`,
+			`data: {"type":"response.output_text.delta","delta":"there."}`,
+			`data: {"type":"response.completed","response":{"id":"resp-stream","model":"test-model","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi there."}]}],"usage":{"input_tokens":5,"output_tokens":3}}}`,
+		} {
+			w.Write([]byte(line + "\n"))
+		}
+	}))
+	defer server.Close()
+
+	svc := &ResponsesService{APIKey: "test-key", Model: GPT41, ModelURL: server.URL}
+	var chunks []string
+	resp, err := svc.DoStream(context.Background(), &llm.Request{
+		Messages: []llm.Message{{
+			Role:    llm.MessageRoleUser,
+			Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}},
+		}},
+	}, func(s string) { chunks = append(chunks, s) })
+	if err != nil {
+		t.Fatalf("DoStream: %v", err)
+	}
+
+	if got := strings.Join(chunks, ""); got != "Hi there." {
+		t.Errorf("streamed text = %q, want %q", got, "Hi there.")
+	}
+	if resp.ID != "resp-stream" {
+		t.Errorf("resp.ID = %q, want %q", resp.ID, "resp-stream")
+	}
+	if len(resp.Content) == 0 || resp.Content[0].Text != "Hi there." {
+		t.Errorf("resp.Content = %v, want text 'Hi there.'", resp.Content)
+	}
+}
+
+func TestResponsesServiceDoWithReasoningTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := responsesResponse{
+			ID:    "resp-reasoning",
+			Model: "test-model",
+			Output: []responsesOutputItem{
+				{Type: "reasoning", Summary: []string{"I thought about it."}},
+				{Type: "message", Role: "assistant", Content: []responsesContent{{Type: "output_text", Text: "Answer."}}},
+			},
+			Usage: responsesUsage{
+				InputTokens:  50,
+				OutputTokens: 30,
+				OutputTokensDetails: &responsesOutputTokensDetails{ReasoningTokens: 15},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	svc := &ResponsesService{APIKey: "test-key", Model: GPT41, ModelURL: server.URL}
+	resp, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{
+			Role:    llm.MessageRoleUser,
+			Content: []llm.Content{{Type: llm.ContentTypeText, Text: "think"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+
+	if resp.Usage.ReasoningTokens != 15 {
+		t.Errorf("ReasoningTokens = %d, want 15", resp.Usage.ReasoningTokens)
+	}
+	if resp.Usage.OutputTokens != 30 {
+		t.Errorf("OutputTokens = %d, want 30", resp.Usage.OutputTokens)
+	}
+
+	// Verify reasoning content was converted
+	// When no ReasoningContent (encrypted) is present, summary becomes Thinking directly
+	var hasThinking, hasText bool
+	for _, c := range resp.Content {
+		switch c.Type {
+		case llm.ContentTypeThinking:
+			hasThinking = true
+			if c.Thinking != "I thought about it." {
+				t.Errorf("Thinking = %q, want %q", c.Thinking, "I thought about it.")
+			}
+		case llm.ContentTypeText:
+			hasText = true
+			if c.Text != "Answer." {
+				t.Errorf("Text = %q, want %q", c.Text, "Answer.")
+			}
+		}
+	}
+	if !hasThinking {
+		t.Error("expected thinking content")
+	}
+	if !hasText {
+		t.Error("expected text content")
 	}
 }

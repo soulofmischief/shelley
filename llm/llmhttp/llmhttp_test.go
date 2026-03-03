@@ -1,7 +1,9 @@
 package llmhttp
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -212,5 +214,115 @@ func TestTransportWithoutRecorder(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Status code = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
+func TestTransportDoesNotBufferSSEForRecorder(t *testing.T) {
+	testStreamingPassThrough(t, true, false)
+}
+
+func TestTransportDoesNotBufferWhenSSERequestedEvenWithoutSSEContentType(t *testing.T) {
+	testStreamingPassThrough(t, false, true)
+}
+
+func testStreamingPassThrough(t *testing.T, setSSEContentType bool, setSSEAccept bool) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	sent := make(chan int, 3)
+	ack := make(chan int, 2)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if setSSEContentType {
+			w.Header().Set("Content-Type", "text/event-stream")
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("response writer does not support flushing")
+			return
+		}
+
+		for i := 1; i <= 3; i++ {
+			fmt.Fprintf(w, "data: chunk-%d\n\n", i)
+			flusher.Flush()
+			sent <- i
+			if i < 3 {
+				select {
+				case got := <-ack:
+					if got != i {
+						t.Errorf("ack = %d, want %d", got, i)
+						return
+					}
+				case <-ctx.Done():
+					t.Error("timed out waiting for client ack")
+					return
+				}
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(nil, func(ctx context.Context, url string, requestBody, responseBody []byte, statusCode int, err error, duration time.Duration) {
+		// no-op
+	})
+
+	req, _ := http.NewRequest("GET", server.URL, nil)
+	if setSSEAccept {
+		req.Header.Set("Accept", "text/event-stream")
+	}
+
+	respCh := make(chan *http.Response, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		resp, err := client.Do(req)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		respCh <- resp
+	}()
+
+	var resp *http.Response
+	select {
+	case err := <-errCh:
+		t.Fatalf("request failed: %v", err)
+	case resp = <-respCh:
+		// good
+	case <-ctx.Done():
+		t.Fatal("client did not receive response in time (possible buffering)")
+	}
+	defer resp.Body.Close()
+
+	scanner := bufio.NewScanner(resp.Body)
+	seen := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		seen++
+
+		select {
+		case expected := <-sent:
+			if expected != seen {
+				t.Fatalf("received event %d but server sent %d", seen, expected)
+			}
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for server send signal")
+		}
+
+		if seen < 3 {
+			ack <- seen
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scanner error: %v", err)
+	}
+
+	if seen != 3 {
+		t.Fatalf("expected 3 events, got %d", seen)
 	}
 }

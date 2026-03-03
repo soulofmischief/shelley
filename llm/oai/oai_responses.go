@@ -1,6 +1,7 @@
 package oai
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -42,10 +43,14 @@ type responsesRequest struct {
 	ToolChoice      any                  `json:"tool_choice,omitempty"`
 	MaxOutputTokens int                  `json:"max_output_tokens,omitempty"`
 	Reasoning       *responsesReasoning  `json:"reasoning,omitempty"`
+	Include         []string             `json:"include,omitempty"`
+	Stream          bool                 `json:"stream"`
+	Store           bool                 `json:"store"`
 }
 
 type responsesReasoning struct {
-	Effort string `json:"effort,omitempty"` // "low", "medium", "high"
+	Effort  string `json:"effort,omitempty"`  // "low", "medium", "high"
+	Summary string `json:"summary,omitempty"` // "auto", "concise", "detailed"
 }
 
 type responsesInputItem struct {
@@ -82,15 +87,41 @@ type responsesResponse struct {
 }
 
 type responsesOutputItem struct {
-	ID        string             `json:"id"`
-	Type      string             `json:"type"`           // "message", "reasoning", "function_call"
-	Role      string             `json:"role,omitempty"` // for messages: "assistant"
-	Status    string             `json:"status,omitempty"`
-	Content   []responsesContent `json:"content,omitempty"`   // for messages
-	CallID    string             `json:"call_id,omitempty"`   // for function_call
-	Name      string             `json:"name,omitempty"`      // for function_call
-	Arguments string             `json:"arguments,omitempty"` // for function_call
-	Summary   []string           `json:"summary,omitempty"`   // for reasoning
+	ID               string             `json:"id"`
+	Type             string             `json:"type"`           // "message", "reasoning", "function_call"
+	Role             string             `json:"role,omitempty"` // for messages: "assistant"
+	Status           string             `json:"status,omitempty"`
+	Content          []responsesContent `json:"content,omitempty"`   // for messages
+	CallID           string             `json:"call_id,omitempty"`   // for function_call
+	Name             string             `json:"name,omitempty"`      // for function_call
+	Arguments        string             `json:"arguments,omitempty"` // for function_call
+	Summary          reasoningSummaries `json:"summary,omitempty"`   // for reasoning
+	ReasoningContent []string           `json:"-"`                   // populated by SSE parser
+}
+
+// reasoningSummaries handles both plain ["text"] and tagged [{"type":"summary_text","text":"..."}] formats.
+type reasoningSummaries []string
+
+func (r *reasoningSummaries) UnmarshalJSON(data []byte) error {
+	var plain []string
+	if err := json.Unmarshal(data, &plain); err == nil {
+		*r = plain
+		return nil
+	}
+	var tagged []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(data, &tagged); err == nil {
+		result := make([]string, 0, len(tagged))
+		for _, s := range tagged {
+			result = append(result, s.Text)
+		}
+		*r = result
+		return nil
+	}
+	*r = nil
+	return nil
 }
 
 type responsesUsage struct {
@@ -279,13 +310,19 @@ func (s *ResponsesService) toLLMResponseFromResponses(resp *responsesResponse, h
 				}
 			}
 		case "reasoning":
-			// Convert reasoning to thinking content
-			if len(item.Summary) > 0 {
-				summaryText := strings.Join(item.Summary, "\n")
-				contents = append(contents, llm.Content{
-					Type: llm.ContentTypeThinking,
-					Text: summaryText,
-				})
+			summaryText := strings.Join(item.Summary, "\n")
+			contentText := strings.Join(item.ReasoningContent, "\n")
+			if summaryText != "" || contentText != "" {
+				c := llm.Content{Type: llm.ContentTypeThinking}
+				if contentText != "" {
+					c.Thinking = contentText
+					c.ThinkingSummary = summaryText
+				} else {
+					c.Thinking = summaryText
+				}
+				contents = append(contents, c)
+			} else {
+				contents = append(contents, llm.Content{Type: llm.ContentTypeRedactedThinking})
 			}
 		case "function_call":
 			// Convert function call to tool use
@@ -317,6 +354,7 @@ func (s *ResponsesService) toLLMResponseFromResponses(resp *responsesResponse, h
 	}
 }
 
+// toLLMUsageFromResponses converts Responses API usage to llm.Usage
 // toLLMUsageFromResponses converts Responses API usage to llm.Usage.
 //
 // OpenAI's Responses API reports input_tokens as the total input (including cached),
@@ -331,10 +369,15 @@ func (s *ResponsesService) toLLMUsageFromResponses(usage responsesUsage, headers
 		cached = uint64(usage.InputTokensDetails.CachedTokens)
 	}
 	out := uint64(usage.OutputTokens)
+	var reasoning uint64
+	if usage.OutputTokensDetails != nil {
+		reasoning = uint64(usage.OutputTokensDetails.ReasoningTokens)
+	}
 	u := llm.Usage{
 		InputTokens:          totalIn - cached,
 		CacheReadInputTokens: cached,
 		OutputTokens:         out,
+		ReasoningTokens:      reasoning,
 	}
 	u.CostUSD = llm.CostUSDFromResponse(headers)
 	return u
@@ -368,49 +411,44 @@ func (s *ResponsesService) MaxImageDimension() int {
 }
 
 // Do sends a request to OpenAI using the Responses API.
-func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error) {
-	httpc := cmp.Or(s.HTTPC, http.DefaultClient)
-	model := cmp.Or(s.Model, DefaultModel)
-
-	// Start with system messages if provided
+// buildRequest constructs a responsesRequest from an llm.Request.
+func (s *ResponsesService) buildRequest(ir *llm.Request, model Model) responsesRequest {
 	var allInput []responsesInputItem
 	if len(ir.System) > 0 {
-		sysItems := fromLLMSystemResponses(ir.System)
-		allInput = append(allInput, sysItems...)
+		allInput = append(allInput, fromLLMSystemResponses(ir.System)...)
 	}
-
-	// Add regular messages
 	for _, msg := range ir.Messages {
-		items := fromLLMMessageResponses(msg)
-		allInput = append(allInput, items...)
+		allInput = append(allInput, fromLLMMessageResponses(msg)...)
 	}
-
-	// Convert tools
 	var tools []responsesTool
 	for _, t := range ir.Tools {
 		tools = append(tools, fromLLMToolResponses(t))
 	}
-
-	// Create the request
 	req := responsesRequest{
 		Model:           model.ModelName,
 		Input:           allInput,
 		Tools:           tools,
 		MaxOutputTokens: cmp.Or(s.MaxTokens, DefaultMaxTokens),
 	}
-
-	// Add reasoning if thinking is enabled
 	if s.ThinkingLevel != llm.ThinkingLevelOff {
 		effort := s.ThinkingLevel.ThinkingEffort()
 		if effort != "" {
-			req.Reasoning = &responsesReasoning{Effort: effort}
+			req.Reasoning = &responsesReasoning{Effort: effort, Summary: "detailed"}
+			req.Include = []string{"reasoning.encrypted_content"}
 		}
 	}
-
-	// Add tool choice if specified
 	if ir.ToolChoice != nil {
 		req.ToolChoice = fromLLMToolChoice(ir.ToolChoice)
 	}
+	return req
+}
+
+// Do sends a non-streaming request to OpenAI using the Responses API.
+func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error) {
+	httpc := cmp.Or(s.HTTPC, http.DefaultClient)
+	model := cmp.Or(s.Model, DefaultModel)
+
+	req := s.buildRequest(ir, model)
 
 	// Construct the full URL
 	baseURL := cmp.Or(s.ModelURL, model.URL, OpenAIURL)
@@ -461,7 +499,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 		// Send request
 		httpResp, err := httpc.Do(httpReq)
 		if err != nil {
-			errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: %w", attempts+1, time.Now().Format(time.DateTime), err))
+			errs = errors.Join(errs, fmt.Errorf("attempt %d: %w", attempts+1, err))
 			continue
 		}
 		defer httpResp.Body.Close()
@@ -479,24 +517,23 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 				Error *responsesError `json:"error"`
 			}{Error: &apiErr}); jsonErr == nil && apiErr.Message != "" {
 				// We have a structured error
-				now := time.Now().Format(time.DateTime)
 				switch {
 				case httpResp.StatusCode >= 500:
 					// Server error, retry
 					slog.WarnContext(ctx, "responses_request_failed", "error", apiErr.Message, "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName)
-					errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, apiErr.Message))
+					errs = errors.Join(errs, fmt.Errorf("status %d (url=%s, model=%s): %s", httpResp.StatusCode, fullURL, model.ModelName, apiErr.Message))
 					continue
 
 				case httpResp.StatusCode == 429:
 					// Rate limited, retry
 					slog.WarnContext(ctx, "responses_request_rate_limited", "error", apiErr.Message, "url", fullURL, "model", model.ModelName)
-					errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (rate limited, url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, apiErr.Message))
+					errs = errors.Join(errs, fmt.Errorf("status %d (rate limited, url=%s, model=%s): %s", httpResp.StatusCode, fullURL, model.ModelName, apiErr.Message))
 					continue
 
 				case httpResp.StatusCode >= 400 && httpResp.StatusCode < 500:
 					// Client error, probably unrecoverable
 					slog.WarnContext(ctx, "responses_request_failed", "error", apiErr.Message, "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName)
-					return nil, errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, apiErr.Message))
+					return nil, errors.Join(errs, fmt.Errorf("status %d (url=%s, model=%s): %s", httpResp.StatusCode, fullURL, model.ModelName, apiErr.Message))
 				}
 			}
 
@@ -529,6 +566,121 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 	}
 }
 
+// Verify ResponsesService implements streaming interfaces
+var _ llm.StreamingService = (*ResponsesService)(nil)
+var _ llm.ThinkingStreamingService = (*ResponsesService)(nil)
+
+// DoStream sends a streaming request.
+func (s *ResponsesService) DoStream(ctx context.Context, ir *llm.Request, onText func(string)) (*llm.Response, error) {
+	return s.DoStreamWithThinking(ctx, ir, onText, nil)
+}
+
+// DoStreamWithThinking sends a streaming request with reasoning callbacks.
+func (s *ResponsesService) DoStreamWithThinking(ctx context.Context, ir *llm.Request, onText func(string), onThinking func(string)) (*llm.Response, error) {
+	httpc := cmp.Or(s.HTTPC, http.DefaultClient)
+	model := cmp.Or(s.Model, DefaultModel)
+
+	req := s.buildRequest(ir, model)
+	req.Stream = true
+
+	baseURL := cmp.Or(s.ModelURL, model.URL, OpenAIURL)
+	fullURL := baseURL + "/responses"
+
+	reqJSON, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	if s.DumpLLM {
+		if reqJSONPretty, err := json.MarshalIndent(req, "", "  "); err == nil {
+			llm.DumpToFile("request", fullURL, reqJSONPretty)
+		}
+	}
+
+	backoff := []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 15 * time.Second}
+	var errs error
+	for attempts := 0; ; attempts++ {
+		if attempts > 10 {
+			return nil, fmt.Errorf("responses request failed after %d attempts: %w", attempts, errs)
+		}
+		if attempts > 0 {
+			sleep := backoff[min(attempts, len(backoff)-1)] + time.Duration(rand.Int64N(int64(time.Second)))
+			time.Sleep(sleep)
+		}
+
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewReader(reqJSON))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Accept", "text/event-stream")
+		httpReq.Header.Set("Authorization", "Bearer "+s.APIKey)
+		if s.Org != "" {
+			httpReq.Header.Set("OpenAI-Organization", s.Org)
+		}
+
+		httpResp, err := httpc.Do(httpReq)
+		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf("attempt %d: %w", attempts+1, err))
+			continue
+		}
+
+		if httpResp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(httpResp.Body)
+			httpResp.Body.Close()
+			if httpResp.StatusCode >= 500 || httpResp.StatusCode == 429 {
+				errs = errors.Join(errs, fmt.Errorf("status %d: %s", httpResp.StatusCode, string(body)))
+				continue
+			}
+			return nil, fmt.Errorf("status %d: %s", httpResp.StatusCode, string(body))
+		}
+
+		var thinkingStream strings.Builder
+		streamThinking := onThinking
+		if streamThinking == nil {
+			streamThinking = func(s string) { thinkingStream.WriteString(s) }
+		} else {
+			orig := streamThinking
+			streamThinking = func(s string) {
+				thinkingStream.WriteString(s)
+				orig(s)
+			}
+		}
+
+		resp, err := parseSSEStream(httpResp.Body, onText, streamThinking)
+		httpResp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.Error != nil {
+			return nil, fmt.Errorf("API error: %s", resp.Error.Message)
+		}
+
+		result := s.toLLMResponseFromResponses(resp, httpResp.Header)
+		if thinkingStream.Len() > 0 {
+			hasThinking := false
+			for _, c := range result.Content {
+				if c.Type == llm.ContentTypeThinking {
+					hasThinking = true
+					break
+				}
+			}
+			if !hasThinking {
+				result.Content = append([]llm.Content{{Type: llm.ContentTypeThinking, Thinking: thinkingStream.String()}}, result.Content...)
+			}
+			filtered := result.Content[:0]
+			for _, c := range result.Content {
+				if c.Type != llm.ContentTypeRedactedThinking {
+					filtered = append(filtered, c)
+				}
+			}
+			result.Content = filtered
+		}
+		return result, nil
+	}
+}
+
 func (s *ResponsesService) UseSimplifiedPatch() bool {
 	return s.Model.UseSimplifiedPatch
 }
@@ -543,5 +695,225 @@ func (s *ResponsesService) ConfigDetails() map[string]string {
 		"full_url":        baseURL + "/responses",
 		"api_key_env":     model.APIKeyEnv,
 		"has_api_key_set": fmt.Sprintf("%v", s.APIKey != ""),
+	}
+}
+
+// SSE event types for Responses API streaming
+type sseEvent struct {
+	Type     string          `json:"type"`
+	Delta    string          `json:"delta,omitempty"`
+	Item     json.RawMessage `json:"item,omitempty"`
+	Response json.RawMessage `json:"response,omitempty"`
+}
+
+type sseItem struct {
+	Type      string                `json:"type"`
+	ID        string                `json:"id,omitempty"`
+	CallID    string                `json:"call_id,omitempty"`
+	Name      string                `json:"name,omitempty"`
+	Arguments string                `json:"arguments,omitempty"`
+	Summary   []sseReasoningSummary `json:"summary,omitempty"`
+	Content   json.RawMessage       `json:"content,omitempty"`
+}
+
+type sseReasoningSummary struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type sseReasoningContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// parseSSEStream parses Responses API SSE events.
+func parseSSEStream(body io.Reader, onText func(string), onThinking func(string)) (*responsesResponse, error) {
+	scanner := bufio.NewScanner(body)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	var response responsesResponse
+	var textContent strings.Builder
+	pendingCalls := make(map[string]*responsesOutputItem)
+	pendingReasoning := make(map[string]*responsesOutputItem)
+	var activeReasoningID string
+	var reasoningSummary, reasoningContent strings.Builder
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		jsonData := strings.TrimPrefix(line, "data: ")
+		if jsonData == "[DONE]" {
+			continue
+		}
+
+		var event sseEvent
+		if err := json.Unmarshal([]byte(jsonData), &event); err != nil {
+			continue
+		}
+
+		switch event.Type {
+		case "response.output_text.delta":
+			textContent.WriteString(event.Delta)
+			if onText != nil {
+				onText(event.Delta)
+			}
+
+		case "response.output_item.added", "response.output_item.done":
+			if len(event.Item) == 0 {
+				continue
+			}
+			var item sseItem
+			if err := json.Unmarshal(event.Item, &item); err != nil {
+				continue
+			}
+			switch item.Type {
+			case "function_call":
+				if item.CallID != "" {
+					pendingCalls[item.CallID] = &responsesOutputItem{
+						Type: "function_call", ID: item.ID,
+						CallID: item.CallID, Name: item.Name, Arguments: item.Arguments,
+					}
+				}
+			case "reasoning":
+				if item.ID == "" {
+					continue
+				}
+				if event.Type == "response.output_item.added" {
+					flushReasoningDeltas(activeReasoningID, pendingReasoning, &reasoningSummary, &reasoningContent)
+					activeReasoningID = item.ID
+					var summaries []string
+					for _, s := range item.Summary {
+						summaries = append(summaries, s.Text)
+					}
+					pendingReasoning[item.ID] = &responsesOutputItem{Type: "reasoning", ID: item.ID, Summary: summaries}
+				} else {
+					// output_item.done: finalized
+					var summaries []string
+					for _, s := range item.Summary {
+						if s.Text != "" {
+							summaries = append(summaries, s.Text)
+						}
+					}
+					oi := &responsesOutputItem{Type: "reasoning", ID: item.ID, Summary: summaries}
+					if len(item.Content) > 0 {
+						var items []sseReasoningContent
+						if err := json.Unmarshal(item.Content, &items); err == nil {
+							for _, c := range items {
+								if c.Text != "" {
+									oi.ReasoningContent = append(oi.ReasoningContent, c.Text)
+								}
+							}
+						}
+					}
+					pendingReasoning[item.ID] = oi
+					if activeReasoningID == item.ID {
+						reasoningSummary.Reset()
+						reasoningContent.Reset()
+					}
+				}
+			}
+
+		case "response.reasoning_summary_part.added":
+			// section marker, no action needed
+
+		case "response.reasoning_summary_text.delta":
+			if event.Delta != "" {
+				reasoningSummary.WriteString(event.Delta)
+				if onThinking != nil {
+					onThinking(event.Delta)
+				}
+			}
+
+		case "response.reasoning_text.delta":
+			if event.Delta != "" {
+				reasoningContent.WriteString(event.Delta)
+			}
+
+		case "response.function_call_arguments.delta":
+			if len(event.Item) > 0 {
+				var item sseItem
+				if err := json.Unmarshal(event.Item, &item); err == nil && item.CallID != "" {
+					if call, ok := pendingCalls[item.CallID]; ok {
+						call.Arguments += event.Delta
+					}
+				}
+			}
+
+		case "response.completed":
+			var completedResp struct {
+				Response responsesResponse `json:"response"`
+			}
+			if err := json.Unmarshal([]byte(jsonData), &completedResp); err == nil {
+				response = completedResp.Response
+			}
+
+		case "response.failed":
+			var failedResp struct {
+				Response struct {
+					Error *responsesError `json:"error"`
+				} `json:"response"`
+			}
+			if err := json.Unmarshal([]byte(jsonData), &failedResp); err == nil && failedResp.Response.Error != nil {
+				e := failedResp.Response.Error
+				return nil, fmt.Errorf("API error (%s): %s", e.Code, e.Message)
+			}
+			return nil, fmt.Errorf("response.failed event received")
+
+		case "response.incomplete":
+			return nil, fmt.Errorf("incomplete response returned")
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading SSE stream: %w", err)
+	}
+
+	flushReasoningDeltas(activeReasoningID, pendingReasoning, &reasoningSummary, &reasoningContent)
+
+	if len(response.Output) == 0 {
+		if textContent.Len() > 0 {
+			response.Output = append(response.Output, responsesOutputItem{
+				Type: "message", Role: "assistant",
+				Content: []responsesContent{{Type: "output_text", Text: textContent.String()}},
+			})
+		}
+		for _, r := range pendingReasoning {
+			response.Output = append(response.Output, *r)
+		}
+		for _, c := range pendingCalls {
+			response.Output = append(response.Output, *c)
+		}
+	} else {
+		for i := range response.Output {
+			if response.Output[i].Type != "reasoning" {
+				continue
+			}
+			if pr, ok := pendingReasoning[response.Output[i].ID]; ok && len(pr.ReasoningContent) > 0 {
+				response.Output[i].ReasoningContent = pr.ReasoningContent
+			}
+		}
+	}
+
+	return &response, nil
+}
+
+func flushReasoningDeltas(id string, pending map[string]*responsesOutputItem, summary, content *strings.Builder) {
+	if id == "" {
+		return
+	}
+	item, ok := pending[id]
+	if !ok {
+		return
+	}
+	if summary.Len() > 0 {
+		item.Summary = append(item.Summary, summary.String())
+		summary.Reset()
+	}
+	if content.Len() > 0 {
+		item.ReasoningContent = append(item.ReasoningContent, content.String())
+		content.Reset()
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"shelley.exe.dev/version"
@@ -121,10 +122,19 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		if resp != nil {
 			statusCode = resp.StatusCode
-			// Read and restore the response body
-			responseBody, _ = io.ReadAll(resp.Body)
-			resp.Body.Close()
-			resp.Body = io.NopCloser(bytes.NewReader(responseBody))
+			accept := strings.ToLower(req.Header.Get("Accept"))
+			contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+			isSSERequest := strings.Contains(accept, "text/event-stream")
+			isSSEResponse := strings.Contains(contentType, "text/event-stream")
+			// Never buffer SSE traffic; doing so breaks streaming.
+			// Some upstreams (e.g. codex) may omit Content-Type while still sending SSE,
+			// so also gate on the request's Accept header.
+			if !isSSERequest && !isSSEResponse {
+				// Read and restore the response body
+				responseBody, _ = io.ReadAll(resp.Body)
+				resp.Body.Close()
+				resp.Body = io.NopCloser(bytes.NewReader(responseBody))
+			}
 		}
 
 		t.Recorder(req.Context(), req.URL.String(), requestBody, responseBody, statusCode, err, time.Since(start))
