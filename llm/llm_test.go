@@ -275,7 +275,7 @@ func TestUsageString(t *testing.T) {
 				InputTokens:  100,
 				OutputTokens: 50,
 			},
-			want: "in: 100, out: 50",
+			want: "in: 100, out: 50, reasoning: 0",
 		},
 		{
 			name: "zero usage",
@@ -283,7 +283,7 @@ func TestUsageString(t *testing.T) {
 				InputTokens:  0,
 				OutputTokens: 0,
 			},
-			want: "in: 0, out: 0",
+			want: "in: 0, out: 0, reasoning: 0",
 		},
 		{
 			name: "high usage",
@@ -291,7 +291,7 @@ func TestUsageString(t *testing.T) {
 				InputTokens:  1000000,
 				OutputTokens: 500000,
 			},
-			want: "in: 1000000, out: 500000",
+			want: "in: 1000000, out: 500000, reasoning: 0",
 		},
 	}
 

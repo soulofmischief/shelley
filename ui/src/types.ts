@@ -29,7 +29,7 @@ export interface LLMMessage {
 
 export interface LLMContent {
   ID: string;
-  Type: number; // 2 = text, 3 = tool_use, 4 = tool_result, 5 = thinking
+  Type: number; // 2 = text, 3 = thinking, 4 = redacted_thinking, 5 = tool_use, 6 = tool_result
   Text?: string;
   ToolName?: string;
   ToolInput?: unknown;
@@ -38,6 +38,7 @@ export interface LLMContent {
   // Other fields from Go struct
   MediaType?: string;
   Thinking?: string;
+  ThinkingSummary?: string;
   Data?: string;
   Signature?: string;
   ToolUseID?: string;
@@ -75,6 +76,8 @@ export interface StreamResponse extends Omit<StreamResponseForTS, "messages"> {
   conversation_list_update?: ConversationListUpdate;
   heartbeat?: boolean;
   notification_event?: NotificationEvent;
+  streaming_text?: string;
+  streaming_thinking?: string;
 }
 
 // Link represents a custom link that can be added to the UI

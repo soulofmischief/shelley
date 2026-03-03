@@ -43,6 +43,8 @@ import BrowserAccessibilityTool from "./BrowserAccessibilityTool";
 import BrowserProfileTool from "./BrowserProfileTool";
 import DirectoryPickerModal from "./DirectoryPickerModal";
 import { useVersionChecker } from "./VersionChecker";
+import ThinkingContent from "./ThinkingContent";
+import MarkdownContent from "./MarkdownContent";
 import TerminalPanel, { EphemeralTerminal } from "./TerminalPanel";
 import ModelPicker from "./ModelPicker";
 import SystemPromptView from "./SystemPromptView";
@@ -808,6 +810,8 @@ function ChatInterface({
     };
   }, [conversationId]);
   const [terminalAutoFocusId, setTerminalAutoFocusId] = useState<string | null>(null);
+  const [streamingText, setStreamingText] = useState<string>("");
+  const [streamingThinking, setStreamingThinking] = useState<string>("");
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const overflowMenuRef = useRef<HTMLDivElement>(null);
@@ -819,6 +823,9 @@ function ChatInterface({
   const userScrolledRef = useRef(false);
   const highlightTimeoutRef = useRef<number | null>(null);
   const loadingRef = useRef(false);
+  const streamingTextRef = useRef("");
+  const streamingThinkingRef = useRef("");
+  const streamingUpdateTimerRef = useRef<number | null>(null);
   // Pending scroll target from loadMessages: undefined = none, null = bottom, number = saved position
   const pendingScrollRef = useRef<number | null | undefined>(undefined);
   const loadingProgressDelayRef = useRef<number | null>(null);
@@ -1250,6 +1257,15 @@ function ChatInterface({
         // Merge new messages without losing existing ones.
         // If no new messages (e.g., only conversation/slug update or heartbeat), keep existing list.
         if (incomingMessages.length > 0) {
+          // Clear streaming text when we get actual messages
+          streamingTextRef.current = "";
+          streamingThinkingRef.current = "";
+          if (streamingUpdateTimerRef.current) {
+            cancelAnimationFrame(streamingUpdateTimerRef.current);
+            streamingUpdateTimerRef.current = null;
+          }
+          setStreamingText("");
+          setStreamingThinking("");
           setMessages((prev) => {
             const byId = new Map<string, Message>();
             for (const m of prev) byId.set(m.message_id, m);
@@ -1311,6 +1327,28 @@ function ChatInterface({
               conversationId,
               streamResponse.context_window_size,
             );
+          }
+        }
+
+        // Handle streaming text deltas
+        if (streamResponse.streaming_text !== undefined) {
+          streamingTextRef.current += streamResponse.streaming_text;
+          if (!streamingUpdateTimerRef.current) {
+            streamingUpdateTimerRef.current = requestAnimationFrame(() => {
+              setStreamingText(streamingTextRef.current);
+              streamingUpdateTimerRef.current = null;
+            });
+          }
+        }
+
+        // Handle streaming thinking/reasoning deltas
+        if (streamResponse.streaming_thinking !== undefined) {
+          streamingThinkingRef.current += streamResponse.streaming_thinking;
+          if (!streamingUpdateTimerRef.current) {
+            streamingUpdateTimerRef.current = requestAnimationFrame(() => {
+              setStreamingThinking(streamingThinkingRef.current);
+              streamingUpdateTimerRef.current = null;
+            });
           }
         }
       } catch (err) {
@@ -2397,7 +2435,31 @@ function ChatInterface({
               </div>
             )
           ) : (
-            <div className="messages-list">{renderMessages()}</div>
+            <div className="messages-list">
+              {renderMessages()}
+
+              {/* Show streaming thinking as it comes in */}
+              {streamingThinking && (
+                <div className="message assistant-message streaming">
+                  <div className="message-content">
+                    <ThinkingContent thinking={streamingThinking} summary="Reasoning..." />
+                  </div>
+                </div>
+              )}
+
+              {/* Show streaming text as it comes in */}
+              {streamingText && (
+                <div className="message assistant-message streaming">
+                  <div className="message-content">
+                    {markdownMode !== "off" ? (
+                      <MarkdownContent text={streamingText} />
+                    ) : (
+                      <div className="whitespace-pre-wrap break-words">{streamingText}</div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
 

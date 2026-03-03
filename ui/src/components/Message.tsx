@@ -940,12 +940,20 @@ const Message = React.memo(function Message({
           />
         );
       }
-      case "redacted_thinking":
-        return <div className="text-tertiary italic text-sm">[Thinking content hidden]</div>;
+      case "redacted_thinking": {
+        const summary = usage?.reasoning_tokens
+          ? `Reasoning used: ${usage.reasoning_tokens.toLocaleString()} tokens (summary not provided by model).`
+          : "Reasoning used (summary not provided by model).";
+        return <ThinkingContent thinking={summary} />;
+      }
       case "thinking": {
         const thinkingText = content.Thinking || content.Text || "";
         if (!thinkingText) return null;
-        return <ThinkingContent thinking={thinkingText} />;
+        const summaryText = content.ThinkingSummary ||
+          (usage?.reasoning_tokens
+            ? `Reasoning used: ${usage.reasoning_tokens.toLocaleString()} tokens`
+            : undefined);
+        return <ThinkingContent thinking={thinkingText} summary={summaryText} />;
       }
       default: {
         // For unknown content types, show the type and try to display useful content

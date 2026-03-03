@@ -120,6 +120,8 @@ type streamResponseForTS struct {
 	ConversationState *conversationStateForTS `json:"conversation_state,omitempty"`
 	Heartbeat         bool                    `json:"heartbeat,omitempty"`
 	NotificationEvent *notificationEventForTS `json:"notification_event,omitempty"`
+	StreamingText     string                  `json:"streaming_text,omitempty"`
+	StreamingThinking string                  `json:"streaming_thinking,omitempty"`
 }
 
 type notificationEventForTS struct {

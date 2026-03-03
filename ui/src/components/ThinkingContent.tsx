@@ -2,20 +2,13 @@ import React, { useState } from "react";
 
 interface ThinkingContentProps {
   thinking: string;
+  summary?: string;
 }
 
-function ThinkingContent({ thinking }: ThinkingContentProps) {
+function ThinkingContent({ thinking, summary }: ThinkingContentProps) {
   const [isExpanded, setIsExpanded] = useState(true);
 
-  // Truncate thinking for display - get first 80 chars
-  const truncateThinking = (text: string, maxLen: number = 80) => {
-    if (!text) return "";
-    const firstLine = text.split("\n")[0];
-    if (firstLine.length <= maxLen) return firstLine;
-    return firstLine.substring(0, maxLen) + "...";
-  };
-
-  const preview = truncateThinking(thinking);
+  const collapsedText = summary || thinking.split("\n")[0] || thinking;
 
   return (
     <div
@@ -45,7 +38,7 @@ function ThinkingContent({ thinking }: ThinkingContentProps) {
             wordBreak: "break-word",
           }}
         >
-          {isExpanded ? thinking : preview}
+          {isExpanded ? thinking : collapsedText}
         </div>
         <button
           className="thinking-toggle"

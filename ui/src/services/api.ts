@@ -391,10 +391,12 @@ class ApiService {
 export const api = new ApiService();
 
 // Custom models API
+export type ProviderType = "anthropic" | "openai" | "openai-responses" | "gemini" | "codex";
+
 export interface CustomModel {
   model_id: string;
   display_name: string;
-  provider_type: "anthropic" | "openai" | "openai-responses" | "gemini";
+  provider_type: ProviderType;
   endpoint: string;
   api_key: string;
   model_name: string;
@@ -404,7 +406,7 @@ export interface CustomModel {
 
 export interface CreateCustomModelRequest {
   display_name: string;
-  provider_type: "anthropic" | "openai" | "openai-responses" | "gemini";
+  provider_type: ProviderType;
   endpoint: string;
   api_key: string;
   model_name: string;
@@ -414,7 +416,7 @@ export interface CreateCustomModelRequest {
 
 export interface TestCustomModelRequest {
   model_id?: string; // If provided with empty api_key, use stored key
-  provider_type: "anthropic" | "openai" | "openai-responses" | "gemini";
+  provider_type: ProviderType;
   endpoint: string;
   api_key: string;
   model_name: string;
@@ -597,3 +599,67 @@ class NotificationChannelsApi {
 }
 
 export const notificationChannelsApi = new NotificationChannelsApi();
+
+// Codex OAuth API
+export interface CodexAuthStatus {
+  authenticated: boolean;
+  account_id?: string;
+  expires_at?: number;
+}
+
+export interface CodexPkceStartResponse {
+  auth_url: string;
+  state: string;
+}
+
+class CodexAuthApi {
+  private baseUrl = "/api/codex-auth";
+
+  private postHeaders = {
+    "Content-Type": "application/json",
+  };
+
+  async getStatus(): Promise<CodexAuthStatus> {
+    const response = await fetch(`${this.baseUrl}/status`);
+    if (!response.ok) {
+      throw new Error(`Failed to get codex auth status: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async startPkceFlow(): Promise<CodexPkceStartResponse> {
+    const response = await fetch(`${this.baseUrl}/pkce/start`, {
+      method: "POST",
+      headers: this.postHeaders,
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to start PKCE flow: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async completePkceFlow(callbackUrl: string): Promise<CodexAuthStatus> {
+    const response = await fetch(`${this.baseUrl}/pkce/complete`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ callback_url: callbackUrl }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || `Failed to complete PKCE flow: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async logout(): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/logout`, {
+      method: "POST",
+      headers: this.postHeaders,
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to logout: ${response.statusText}`);
+    }
+  }
+}
+
+export const codexAuthApi = new CodexAuthApi();

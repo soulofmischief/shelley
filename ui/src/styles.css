@@ -5685,4 +5685,128 @@ kbd {
   100% {
     transform: translateX(300%);
   }
+/* Codex Auth Section */
+.codex-section {
+  padding: 16px;
+  margin-bottom: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.codex-section h4 {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.codex-description {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.codex-error {
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: var(--error-bg);
+  color: var(--error-text);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.codex-login-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.codex-login-flow p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.codex-login-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.codex-logged-in {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.codex-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.codex-status-badge {
+  padding: 4px 8px;
+  background: var(--success-bg);
+  color: var(--success-text);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.codex-account-id {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.codex-models-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.codex-models-list p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.codex-model-btn {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  border-radius: 6px;
+  text-align: left;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.codex-model-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-active);
+}
+
+.codex-model-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.btn-link:hover {
+  color: var(--accent-hover);
 }

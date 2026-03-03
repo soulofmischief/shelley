@@ -3,9 +3,12 @@ import Modal from "./Modal";
 import { useI18n } from "../i18n";
 import {
   customModelsApi,
+  codexAuthApi,
   CustomModel,
   CreateCustomModelRequest,
   TestCustomModelRequest,
+  CodexAuthStatus,
+  ProviderType,
 } from "../services/api";
 
 interface ModelsModalProps {
@@ -14,13 +17,14 @@ interface ModelsModalProps {
   onModelsChanged?: () => void;
 }
 
-type ProviderType = "anthropic" | "openai" | "openai-responses" | "gemini";
+// ProviderType imported from api.ts (includes "codex")
 
 const DEFAULT_ENDPOINTS: Record<ProviderType, string> = {
   anthropic: "https://api.anthropic.com/v1/messages",
   openai: "https://api.openai.com/v1",
   "openai-responses": "https://api.openai.com/v1",
   gemini: "https://generativelanguage.googleapis.com/v1beta",
+  codex: "https://chatgpt.com/backend-api/codex/responses",
 };
 
 const PROVIDER_LABELS: Record<ProviderType, string> = {
@@ -28,6 +32,7 @@ const PROVIDER_LABELS: Record<ProviderType, string> = {
   openai: "OpenAI (Chat API)",
   "openai-responses": "OpenAI (Responses API)",
   gemini: "Google Gemini",
+  codex: "Codex (ChatGPT OAuth)",
 };
 
 const DEFAULT_MODELS: Record<ProviderType, { name: string; model_name: string }[]> = {
@@ -42,6 +47,7 @@ const DEFAULT_MODELS: Record<ProviderType, { name: string; model_name: string }[
     { name: "Gemini 3 Pro", model_name: "gemini-3-pro-preview" },
     { name: "Gemini 3 Flash", model_name: "gemini-3-flash-preview" },
   ],
+  codex: [],
 };
 
 // Built-in model info from init data
@@ -73,6 +79,188 @@ const emptyForm: FormData = {
   max_tokens: 200000,
   tags: "",
 };
+
+// Codex models that become available after login
+const CODEX_MODELS = [
+  { name: "GPT-5.3 Codex", model_name: "gpt-5.3-codex" },
+  { name: "GPT-5.2 Codex", model_name: "gpt-5.2-codex" },
+  { name: "GPT-5.2", model_name: "gpt-5.2" },
+  { name: "GPT-5.1", model_name: "gpt-5.1" },
+];
+
+interface CodexAuthSectionProps {
+  onModelsChanged?: () => void;
+  existingModelNames: Set<string>;
+}
+
+function CodexAuthSection({ onModelsChanged, existingModelNames }: CodexAuthSectionProps) {
+  const [status, setStatus] = useState<CodexAuthStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [pkceFlow, setPkceFlow] = useState<{ auth_url: string } | null>(null);
+  const [callbackUrl, setCallbackUrl] = useState("");
+  const [completing, setCompleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [addingModel, setAddingModel] = useState<string | null>(null);
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const result = await codexAuthApi.getStatus();
+      setStatus(result);
+    } catch (err) {
+      console.error("Failed to fetch Codex auth status:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStatus();
+  }, [fetchStatus]);
+
+  const handleStartLogin = async () => {
+    try {
+      setError(null);
+      const result = await codexAuthApi.startPkceFlow();
+      setPkceFlow(result);
+      // Open the auth URL in a new tab
+      window.open(result.auth_url, "_blank");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start login");
+    }
+  };
+
+  const handleCompleteLogin = async () => {
+    if (!callbackUrl) return;
+    try {
+      setCompleting(true);
+      setError(null);
+      await codexAuthApi.completePkceFlow(callbackUrl);
+      setPkceFlow(null);
+      setCallbackUrl("");
+      await fetchStatus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to complete login");
+    } finally {
+      setCompleting(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await codexAuthApi.logout();
+      setStatus({ authenticated: false });
+    } catch (err) {
+      console.error("Failed to logout:", err);
+    }
+  };
+
+  const handleAddModel = async (modelName: string, displayName: string) => {
+    try {
+      setAddingModel(modelName);
+      setError(null);
+      await customModelsApi.createCustomModel({
+        display_name: displayName,
+        provider_type: "codex",
+        endpoint: "https://chatgpt.com/backend-api/codex/responses",
+        api_key: "", // Not needed for codex
+        model_name: modelName,
+        max_tokens: 200000,
+        tags: "",
+      });
+      onModelsChanged?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add model");
+    } finally {
+      setAddingModel(null);
+    }
+  };
+
+  if (loading) {
+    return <div className="codex-section">Loading...</div>;
+  }
+
+  return (
+    <div className="codex-section">
+      <h4>ChatGPT / Codex Models</h4>
+      <p className="codex-description">
+        Log in with your ChatGPT Plus/Pro subscription to access GPT-5 Codex models.
+      </p>
+
+      {error && <div className="codex-error">{error}</div>}
+
+      {!status?.authenticated ? (
+        // Not logged in
+        pkceFlow ? (
+          // PKCE flow in progress
+          <div className="codex-login-flow">
+            <p>1. Log in at the opened page</p>
+            <p>2. After login, you'll be redirected to a page that won't load</p>
+            <p>3. Copy the full URL from your browser's address bar:</p>
+            <input
+              type="text"
+              value={callbackUrl}
+              onChange={(e) => setCallbackUrl(e.target.value)}
+              placeholder="http://localhost:1455/auth/callback?code=..."
+              className="form-input"
+            />
+            <div className="codex-login-actions">
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  setPkceFlow(null);
+                  setCallbackUrl("");
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={handleCompleteLogin}
+                disabled={!callbackUrl || completing}
+              >
+                {completing ? "Completing..." : "Complete Login"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          // Not started
+          <button className="btn-primary" onClick={handleStartLogin}>
+            Log in with ChatGPT
+          </button>
+        )
+      ) : (
+        // Logged in
+        <div className="codex-logged-in">
+          <div className="codex-status">
+            <span className="codex-status-badge">✓ Logged in</span>
+            {status.account_id && (
+              <span className="codex-account-id">Account: {status.account_id}</span>
+            )}
+            <button className="btn-link" onClick={handleLogout}>
+              Log out
+            </button>
+          </div>
+
+          {CODEX_MODELS.filter(m => !existingModelNames.has(m.model_name)).length > 0 && (
+            <div className="codex-models-list">
+              <p>Click a model to add it:</p>
+              {CODEX_MODELS.filter(m => !existingModelNames.has(m.model_name)).map((model) => (
+                  <button
+                    key={model.model_name}
+                    className="codex-model-btn"
+                    onClick={() => handleAddModel(model.model_name, model.name)}
+                    disabled={addingModel === model.model_name}
+                  >
+                    {addingModel === model.model_name ? "Adding..." : model.name}
+                  </button>
+                ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ModelsModal({ isOpen, onClose, onModelsChanged }: ModelsModalProps) {
   const { t } = useI18n();
@@ -601,6 +789,12 @@ function ModelsModal({ isOpen, onClose, onModelsChanged }: ModelsModalProps) {
                 </div>
               )}
             </div>
+
+            {/* Codex OAuth Section */}
+            <CodexAuthSection
+              onModelsChanged={() => { loadModels(); onModelsChanged?.(); }}
+              existingModelNames={new Set(models.map(m => m.model_name))}
+            />
           </>
         )}
       </div>

@@ -20,6 +20,7 @@ export interface Usage {
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
   output_tokens: number;
+  reasoning_tokens?: number;
   cost_usd: number;
   model?: string;
   start_time?: string | null;
@@ -59,6 +60,8 @@ export interface StreamResponseForTS {
   conversation_state?: ConversationStateForTS | null;
   heartbeat?: boolean;
   notification_event?: NotificationEventForTS | null;
+  streaming_text?: string;
+  streaming_thinking?: string;
 }
 
 export interface ConversationWithStateForTS {
@@ -79,6 +82,6 @@ export interface ConversationWithStateForTS {
   subagent_count: number;
 }
 
-export type MessageType = "user" | "agent" | "tool" | "error" | "system" | "gitinfo";
+export type MessageType = 'user' | 'agent' | 'tool' | 'error' | 'system' | 'gitinfo';
 
 export type EventType = string;
