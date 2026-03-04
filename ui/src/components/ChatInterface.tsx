@@ -671,7 +671,7 @@ function ChatInterface({
       return defaultModel;
     }
     const firstReady = initModels.find((m) => m.ready);
-    return firstReady?.id || "claude-sonnet-4.5";
+    return firstReady?.id || "";
   });
   // Wrapper to persist model selection to localStorage
   const setSelectedModel = (model: string) => {
@@ -740,6 +740,14 @@ function ChatInterface({
         // Also update the global init data so other components see the change
         if (window.__SHELLEY_INIT__) {
           window.__SHELLEY_INIT__.models = newModels;
+        }
+        // Update selectedModel if current selection is no longer ready
+        const currentModelInfo = newModels.find((m) => m.id === selectedModel);
+        if (!currentModelInfo?.ready) {
+          const firstReady = newModels.find((m) => m.ready);
+          if (firstReady) {
+            setSelectedModel(firstReady.id);
+          }
         }
       })
       .catch((err) => {
