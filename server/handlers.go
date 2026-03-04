@@ -361,23 +361,23 @@ func (s *Server) serveIndexWithInit(w http.ResponseWriter, r *http.Request, fs h
 	// Build initialization data
 	modelList := s.getModelList()
 
-	// Select default model - use configured default if available, otherwise first ready model
-	// If no models are available, default_model should be empty
+	// Select default model - use configured default if available and ready, otherwise first ready model
+	// If no models are ready, default_model should be empty
 	defaultModel := ""
 	if len(modelList) > 0 {
-		defaultModel = s.defaultModel
-		if defaultModel == "" {
-			defaultModel = models.Default().ID
+		candidate := s.defaultModel
+		if candidate == "" {
+			candidate = models.Default().ID
 		}
-		defaultModelAvailable := false
+		// Check if candidate is ready
 		for _, m := range modelList {
-			if m.ID == defaultModel && m.Ready {
-				defaultModelAvailable = true
+			if m.ID == candidate && m.Ready {
+				defaultModel = candidate
 				break
 			}
 		}
-		if !defaultModelAvailable {
-			// Fall back to first ready model
+		// If candidate not ready, fall back to first ready model
+		if defaultModel == "" {
 			for _, m := range modelList {
 				if m.Ready {
 					defaultModel = m.ID
