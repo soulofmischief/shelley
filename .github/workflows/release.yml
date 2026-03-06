@@ -5,6 +5,7 @@ on:
     workflows: ["Test"]
     branches:
       - main
+      - dev
     types:
       - completed
 

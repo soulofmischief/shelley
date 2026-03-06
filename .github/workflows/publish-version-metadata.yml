@@ -6,6 +6,11 @@ on:
     types:
       - completed
   workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to publish metadata for'
+        required: false
+        default: 'main'
 
 permissions:
   contents: read
@@ -25,9 +30,40 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.inputs.branch || github.event.workflow_run.head_branch || 'main' }}
+
+      - name: Determine branch
+        id: branch
+        run: |
+          BRANCH="${{ github.event.inputs.branch || github.event.workflow_run.head_branch || 'main' }}"
+          echo "branch=${BRANCH}" >> $GITHUB_OUTPUT
+          echo "Building metadata for branch: ${BRANCH}"
+
+      - name: Download existing pages artifact
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: github-pages
+          path: _existing
+
+      - name: Extract existing site
+        continue-on-error: true
+        run: |
+          if [ -f _existing/artifact.tar ]; then
+            mkdir -p _site
+            tar -xf _existing/artifact.tar -C _site || true
+          fi
 
       - name: Generate version metadata
-        run: python3 scripts/generate-version-metadata.py _site
+        run: |
+          BRANCH="${{ steps.branch.outputs.branch }}"
+          if [ "$BRANCH" = "main" ]; then
+            # Main branch goes to root
+            python3 scripts/generate-version-metadata.py _site
+          else
+            # Other branches go to subdirectory
+            python3 scripts/generate-version-metadata.py "_site/${BRANCH}"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

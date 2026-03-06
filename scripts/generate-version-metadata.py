@@ -5,12 +5,50 @@ Generates release.json, commits.json, and index.html.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 
-def generate_release_json(output_dir: Path) -> None:
+def get_repo_info() -> tuple[str, str]:
+    """Get owner and repo from git remote or environment."""
+    # Allow override via environment
+    owner = os.environ.get("GITHUB_REPOSITORY_OWNER")
+    repo = os.environ.get("GITHUB_REPOSITORY", "").split("/")[-1] if os.environ.get("GITHUB_REPOSITORY") else None
+    
+    if owner and repo:
+        return owner, repo
+    
+    # Fall back to parsing git remote
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            url = result.stdout.strip()
+            # Parse https://github.com/owner/repo.git or git@github.com:owner/repo.git
+            if "github.com" in url:
+                if url.startswith("git@"):
+                    # git@github.com:owner/repo.git
+                    path = url.split(":")[1]
+                else:
+                    # https://github.com/owner/repo.git
+                    path = url.split("github.com/")[1]
+                path = path.rstrip(".git")
+                parts = path.split("/")
+                if len(parts) >= 2:
+                    return parts[0], parts[1]
+    except Exception:
+        pass
+    
+    # Default fallback
+    return "boldsoftware", "shelley"
+
+
+def generate_release_json(output_dir: Path, owner: str, repo: str) -> None:
     """Generate release.json with latest release information."""
     # Get latest tag - fail if none exists
     result = subprocess.run(
@@ -39,6 +77,8 @@ def generate_release_json(output_dir: Path) -> None:
     ).strip()
 
     version = latest_tag[1:] if latest_tag.startswith("v") else latest_tag
+    
+    base_url = f"https://github.com/{owner}/{repo}/releases/download/{latest_tag}"
 
     release_info = {
         "tag_name": latest_tag,
@@ -48,12 +88,12 @@ def generate_release_json(output_dir: Path) -> None:
         "commit_time": latest_commit_time,
         "published_at": published_at,
         "download_urls": {
-            "darwin_amd64": f"https://github.com/boldsoftware/shelley/releases/download/{latest_tag}/shelley_darwin_amd64",
-            "darwin_arm64": f"https://github.com/boldsoftware/shelley/releases/download/{latest_tag}/shelley_darwin_arm64",
-            "linux_amd64": f"https://github.com/boldsoftware/shelley/releases/download/{latest_tag}/shelley_linux_amd64",
-            "linux_arm64": f"https://github.com/boldsoftware/shelley/releases/download/{latest_tag}/shelley_linux_arm64",
+            "darwin_amd64": f"{base_url}/shelley_darwin_amd64",
+            "darwin_arm64": f"{base_url}/shelley_darwin_arm64",
+            "linux_amd64": f"{base_url}/shelley_linux_amd64",
+            "linux_arm64": f"{base_url}/shelley_linux_arm64",
         },
-        "checksums_url": f"https://github.com/boldsoftware/shelley/releases/download/{latest_tag}/checksums.txt",
+        "checksums_url": f"{base_url}/checksums.txt",
     }
 
     output_path = output_dir / "release.json"
@@ -81,13 +121,13 @@ def generate_commits_json(output_dir: Path, count: int = 500) -> None:
     print(f"Generated {output_path} with {len(commits)} commits")
 
 
-def generate_index_html(output_dir: Path) -> None:
+def generate_index_html(output_dir: Path, owner: str, repo: str) -> None:
     """Generate index.html."""
-    html = """<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head><title>Shelley</title></head>
 <body>
-<p><a href="https://github.com/boldsoftware/shelley">github.com/boldsoftware/shelley</a></p>
+<p><a href="https://github.com/{owner}/{repo}">github.com/{owner}/{repo}</a></p>
 <ul>
 <li><a href="release.json">release.json</a></li>
 <li><a href="commits.json">commits.json</a></li>
@@ -104,10 +144,13 @@ def generate_index_html(output_dir: Path) -> None:
 def main() -> None:
     output_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("_site")
     output_dir.mkdir(parents=True, exist_ok=True)
+    
+    owner, repo = get_repo_info()
+    print(f"Using repo: {owner}/{repo}")
 
-    generate_release_json(output_dir)
+    generate_release_json(output_dir, owner, repo)
     generate_commits_json(output_dir)
-    generate_index_html(output_dir)
+    generate_index_html(output_dir, owner, repo)
 
 
 if __name__ == "__main__":
