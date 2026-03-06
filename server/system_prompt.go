@@ -70,28 +70,51 @@ func (c *CodebaseInfo) SubdirGuidanceSummary() string {
 }
 
 // SystemPromptOption configures optional fields on the system prompt.
-type SystemPromptOption func(*SystemPromptData)
+type SystemPromptOption func(*systemPromptOptions)
+
+type systemPromptOptions struct {
+	userEmail      string
+	customTemplate string
+}
 
 // WithUserEmail sets the user's email in the system prompt.
 func WithUserEmail(email string) SystemPromptOption {
-	return func(d *SystemPromptData) {
-		d.UserEmail = email
+	return func(o *systemPromptOptions) {
+		o.userEmail = email
+	}
+}
+
+// WithCustomTemplate overrides the default system prompt template.
+func WithCustomTemplate(tmpl string) SystemPromptOption {
+	return func(o *systemPromptOptions) {
+		o.customTemplate = tmpl
 	}
 }
 
 // GenerateSystemPrompt generates the system prompt using the embedded template.
 // If workingDir is empty, it uses the current working directory.
+// Use WithCustomTemplate to override the default template.
 func GenerateSystemPrompt(workingDir string, opts ...SystemPromptOption) (string, error) {
+	var options systemPromptOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	data, err := collectSystemData(workingDir)
 	if err != nil {
 		return "", fmt.Errorf("failed to collect system data: %w", err)
 	}
 
-	for _, opt := range opts {
-		opt(data)
+	if options.userEmail != "" {
+		data.UserEmail = options.userEmail
 	}
 
-	tmpl, err := template.New("system_prompt").Parse(systemPromptTemplate)
+	templateStr := systemPromptTemplate
+	if options.customTemplate != "" {
+		templateStr = options.customTemplate
+	}
+
+	tmpl, err := template.New("system_prompt").Parse(templateStr)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse template: %w", err)
 	}

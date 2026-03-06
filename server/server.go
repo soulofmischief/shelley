@@ -221,40 +221,42 @@ type ConversationListUpdate struct {
 
 // Server manages the HTTP API and active conversations
 type Server struct {
-	db                  *db.DB
-	llmManager          LLMProvider
-	toolSetConfig       claudetool.ToolSetConfig
-	activeConversations map[string]*ConversationManager
-	mu                  sync.Mutex
-	logger              *slog.Logger
-	predictableOnly     bool
-	terminalURL         string
-	defaultModel        string
-	links               []Link
-	requireHeader       string
-	conversationGroup   singleflight.Group[string, *ConversationManager]
-	versionChecker      *VersionChecker
-	notifDispatcher     *notifications.Dispatcher
-	shutdownCh          chan struct{} // Signals background routines to stop
-	listenPort          int           // TCP port the server is listening on
+	db                   *db.DB
+	llmManager           LLMProvider
+	toolSetConfig        claudetool.ToolSetConfig
+	activeConversations  map[string]*ConversationManager
+	mu                   sync.Mutex
+	logger               *slog.Logger
+	predictableOnly      bool
+	terminalURL          string
+	defaultModel         string
+	links                []Link
+	requireHeader        string
+	conversationGroup    singleflight.Group[string, *ConversationManager]
+	versionChecker       *VersionChecker
+	notifDispatcher      *notifications.Dispatcher
+	shutdownCh           chan struct{} // Signals background routines to stop
+	listenPort           int           // TCP port the server is listening on
+	systemPromptTemplate string        // Custom system prompt template (optional)
 }
 
 // NewServer creates a new server instance
-func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool.ToolSetConfig, logger *slog.Logger, predictableOnly bool, terminalURL, defaultModel, requireHeader string, links []Link, updateSource *UpdateSourceConfig) *Server {
+func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool.ToolSetConfig, logger *slog.Logger, predictableOnly bool, terminalURL, defaultModel, requireHeader string, links []Link, updateSource *UpdateSourceConfig, systemPromptTemplate string) *Server {
 	s := &Server{
-		db:                  database,
-		llmManager:          llmManager,
-		toolSetConfig:       toolSetConfig,
-		activeConversations: make(map[string]*ConversationManager),
-		logger:              logger,
-		predictableOnly:     predictableOnly,
-		terminalURL:         terminalURL,
-		defaultModel:        defaultModel,
-		requireHeader:       requireHeader,
-		links:               links,
-		versionChecker:      NewVersionChecker(updateSource),
-		notifDispatcher:     notifications.NewDispatcher(logger),
-		shutdownCh:          make(chan struct{}),
+		db:                   database,
+		llmManager:           llmManager,
+		toolSetConfig:        toolSetConfig,
+		activeConversations:  make(map[string]*ConversationManager),
+		logger:               logger,
+		predictableOnly:      predictableOnly,
+		terminalURL:          terminalURL,
+		defaultModel:         defaultModel,
+		requireHeader:        requireHeader,
+		links:                links,
+		versionChecker:       NewVersionChecker(updateSource),
+		notifDispatcher:      notifications.NewDispatcher(logger),
+		shutdownCh:           make(chan struct{}),
+		systemPromptTemplate: systemPromptTemplate,
 	}
 
 	// Set up subagent support
@@ -694,7 +696,7 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 			s.publishConversationState(state)
 		}
 
-		manager := NewConversationManager(conversationID, s.db, s.logger, s.toolSetConfig, recordMessage, onStateChange)
+		manager := NewConversationManager(conversationID, s.db, s.logger, s.toolSetConfig, recordMessage, onStateChange, s.systemPromptTemplate)
 		manager.userEmail = userEmail
 		if err := manager.Hydrate(ctx); err != nil {
 			return nil, err
@@ -733,7 +735,7 @@ func (s *Server) getOrCreateSubagentConversationManager(ctx context.Context, con
 		subagentConfig := s.toolSetConfig
 		subagentConfig.SubagentDepth = s.toolSetConfig.SubagentDepth + 1
 
-		manager := NewConversationManager(conversationID, s.db, s.logger, subagentConfig, recordMessage, onStateChange)
+		manager := NewConversationManager(conversationID, s.db, s.logger, subagentConfig, recordMessage, onStateChange, s.systemPromptTemplate)
 		if err := manager.Hydrate(ctx); err != nil {
 			return nil, err
 		}

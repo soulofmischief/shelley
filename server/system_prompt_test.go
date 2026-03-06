@@ -168,3 +168,32 @@ func TestSystemPromptIncludesUserEmail(t *testing.T) {
 		t.Error("system prompt should contain the user email when provided")
 	}
 }
+
+func TestSystemPromptWithCustomTemplate(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Custom template that uses template variables
+	customTemplate := `Custom agent for {{.WorkingDirectory}}.
+{{if .GitInfo}}Git root: {{.GitInfo.Root}}{{end}}`
+
+	prompt, err := GenerateSystemPrompt(tmpDir, WithCustomTemplate(customTemplate))
+	if err != nil {
+		t.Fatalf("GenerateSystemPrompt with custom template failed: %v", err)
+	}
+
+	if !strings.Contains(prompt, "Custom agent for") {
+		t.Error("system prompt should use custom template")
+	}
+	if !strings.Contains(prompt, tmpDir) {
+		t.Errorf("system prompt should contain working directory %s", tmpDir)
+	}
+
+	// Test that default template is used when no custom template is provided
+	defaultPrompt, err := GenerateSystemPrompt(tmpDir)
+	if err != nil {
+		t.Fatalf("GenerateSystemPrompt without custom template failed: %v", err)
+	}
+	if strings.Contains(defaultPrompt, "Custom agent") {
+		t.Error("default system prompt should not contain custom template content")
+	}
+}

@@ -40,6 +40,10 @@ type LLMConfig struct {
 	// UpdateSource configures where to check for updates (optional)
 	UpdateSource *UpdateSourceConfig
 
+	// SystemPrompt overrides the default system prompt template (optional)
+	// This is a Go text/template that receives SystemPromptData
+	SystemPrompt string
+
 	// DB is the database for recording LLM requests (optional)
 	DB *db.DB
 

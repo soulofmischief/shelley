@@ -111,7 +111,7 @@ func runServe(global GlobalConfig, args []string) {
 	toolSetConfig := setupToolSetConfig(llmManager, llmManager)
 
 	// Create server
-	svr := server.NewServer(database, llmManager, toolSetConfig, logger, global.PredictableOnly, llmConfig.TerminalURL, llmConfig.DefaultModel, *requireHeader, llmConfig.Links, llmConfig.UpdateSource)
+	svr := server.NewServer(database, llmManager, toolSetConfig, logger, global.PredictableOnly, llmConfig.TerminalURL, llmConfig.DefaultModel, *requireHeader, llmConfig.Links, llmConfig.UpdateSource, llmConfig.SystemPrompt)
 
 	// Seed notification channels from config file if DB is empty (one-time migration)
 	svr.SeedNotificationChannelsFromConfig(llmConfig.NotificationChannels)
@@ -311,6 +311,7 @@ func buildLLMConfig(logger *slog.Logger, configPath, terminalURL, defaultModel s
 			Links                []server.Link              `json:"links"`
 			NotificationChannels []map[string]any           `json:"notification_channels"`
 			UpdateSource         *server.UpdateSourceConfig `json:"update_source"`
+			SystemPrompt         string                     `json:"system_prompt"`
 		}
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			logger.Warn("Failed to parse config file", "path", configPath, "error", err)
@@ -363,6 +364,11 @@ func buildLLMConfig(logger *slog.Logger, configPath, terminalURL, defaultModel s
 		if cfg.UpdateSource != nil {
 			llmCfg.UpdateSource = cfg.UpdateSource
 			logger.Info("Update source configured", "owner", cfg.UpdateSource.Owner, "repo", cfg.UpdateSource.Repo, "branch", cfg.UpdateSource.Branch)
+		}
+
+		if cfg.SystemPrompt != "" {
+			llmCfg.SystemPrompt = cfg.SystemPrompt
+			logger.Info("Custom system prompt configured")
 		}
 	}
 
