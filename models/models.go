@@ -61,6 +61,9 @@ type Model struct {
 	// GatewayEnabled indicates whether this model is available when using a gateway
 	GatewayEnabled bool
 
+	// OAuthFallback specifies an OAuth provider to try if API key is missing (e.g., "codex")
+	OAuthFallback string
+
 	// Factory creates an llm.Service instance for this model
 	Factory func(config *Config, httpc *http.Client) (llm.Service, error)
 }
@@ -269,6 +272,7 @@ func All() []Model {
 			Description:     "GPT-5.4",
 			RequiredEnvVars: []string{"OPENAI_API_KEY"},
 			GatewayEnabled:  true,
+			OAuthFallback:   "codex",
 			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
 				if config.OpenAIAPIKey == "" {
 					return nil, fmt.Errorf("gpt-5.4 requires OPENAI_API_KEY")
@@ -284,8 +288,10 @@ func All() []Model {
 			ID:              "gpt-5.3-codex",
 			Provider:        ProviderOpenAI,
 			Description:     "GPT-5.3 Codex",
+			Tags:            "slug",
 			RequiredEnvVars: []string{"OPENAI_API_KEY"},
 			GatewayEnabled:  true,
+			OAuthFallback:   "codex",
 			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
 				if config.OpenAIAPIKey == "" {
 					return nil, fmt.Errorf("gpt-5.3-codex requires OPENAI_API_KEY")
@@ -303,6 +309,7 @@ func All() []Model {
 			Description:     "GPT-5.2 Codex",
 			RequiredEnvVars: []string{"OPENAI_API_KEY"},
 			GatewayEnabled:  true,
+			OAuthFallback:   "codex",
 			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
 				if config.OpenAIAPIKey == "" {
 					return nil, fmt.Errorf("gpt-5.2-codex requires OPENAI_API_KEY")
@@ -667,21 +674,37 @@ func NewManager(cfg *Config) (*Manager, error) {
 		if useGateway && !model.GatewayEnabled {
 			continue
 		}
+
+		// Try API key first
 		svc, err := model.Factory(cfg, httpc)
-		if err != nil {
-			// Model not available (e.g., missing API key) - skip it
-			continue
+		if err == nil {
+			manager.services[model.ID] = serviceEntry{
+				service:     svc,
+				provider:    model.Provider,
+				modelID:     model.ID,
+				source:      model.Source(cfg),
+				displayName: model.ID,
+				tags:        model.Tags,
+			}
+			manager.modelOrder = append(manager.modelOrder, model.ID)
 		}
 
-		manager.services[model.ID] = serviceEntry{
-			service:     svc,
-			provider:    model.Provider,
-			modelID:     model.ID,
-			source:      model.Source(cfg),
-			displayName: model.ID, // built-in models use ID as display name
-			tags:        model.Tags,
+		// Also register OAuth version if available (as separate model)
+		if model.OAuthFallback != "" && cfg.DB != nil {
+			oauthSvc := manager.createOAuthService(model.ID, model.OAuthFallback, httpc)
+			if oauthSvc != nil {
+				oauthID := model.ID + "-oauth"
+				manager.services[oauthID] = serviceEntry{
+					service:     oauthSvc,
+					provider:    model.Provider,
+					modelID:     oauthID,
+					source:      "OAuth",
+					displayName: model.ID + " (OAuth)",
+					tags:        model.Tags,
+				}
+				manager.modelOrder = append(manager.modelOrder, oauthID)
+			}
 		}
-		manager.modelOrder = append(manager.modelOrder, model.ID)
 	}
 
 	// Load custom models from database
@@ -903,5 +926,41 @@ func (m *Manager) createCodexService(model *generated.Model) llm.Service {
 		MaxTokens:     int(model.MaxTokens),
 		HTTPC:         m.httpc,
 		ThinkingLevel: thinkingLevel,
+	}
+}
+
+// createOAuthService creates a service for a built-in model using OAuth credentials
+func (m *Manager) createOAuthService(modelID, oauthProvider string, httpc *http.Client) llm.Service {
+	if m.db == nil {
+		return nil
+	}
+
+	if oauthProvider != "codex" {
+		if m.logger != nil {
+			m.logger.Error("Unknown OAuth provider", "provider", oauthProvider)
+		}
+		return nil
+	}
+
+	cred, err := m.db.GetOAuthCredentials(context.Background(), "codex")
+	if err != nil {
+		if m.logger != nil && !errors.Is(err, sql.ErrNoRows) {
+			m.logger.Error("Failed to get codex credentials", "error", err)
+		}
+		return nil
+	}
+
+	accountID := ""
+	if cred.AccountID != nil {
+		accountID = *cred.AccountID
+	}
+
+	return &codex.Service{
+		AccessToken:   cred.AccessToken,
+		AccountID:     accountID,
+		Model:         modelID, // Use the built-in model ID (e.g., "gpt-5.3-codex")
+		MaxTokens:     codex.DefaultMaxTokens,
+		HTTPC:         httpc,
+		ThinkingLevel: llm.ThinkingLevelMedium,
 	}
 }
