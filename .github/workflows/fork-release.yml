@@ -46,22 +46,33 @@ jobs:
             tar -czf "templates/$name.tar.gz" -C "templates/$name" --exclude='.DS_Store' .
           done
 
-      - name: Build Linux binary
+      - name: Build binaries
         run: |
           VERSION="dev-$(git rev-list --count HEAD)-$(git rev-parse --short=6 HEAD)"
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -ldflags "-s -w -X shelley.exe.dev/version.Version=${VERSION}" \
-            -o shelley_linux_amd64 \
-            ./cmd/shelley
+          LDFLAGS="-s -w -X shelley.exe.dev/version.Version=${VERSION}"
+          
+          # Linux
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$LDFLAGS" -o shelley_linux_amd64 ./cmd/shelley
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$LDFLAGS" -o shelley_linux_arm64 ./cmd/shelley
+          
+          # macOS
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "$LDFLAGS" -o shelley_darwin_amd64 ./cmd/shelley
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o shelley_darwin_arm64 ./cmd/shelley
 
       - name: Create/update dev release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: dev-latest
           name: Dev Build (latest)
-          prerelease: true
-          files: shelley_linux_amd64
+          prerelease: false
+          files: |
+            shelley_linux_amd64
+            shelley_linux_arm64
+            shelley_darwin_amd64
+            shelley_darwin_arm64
           body: |
             Latest dev build from commit ${{ github.sha }}
             
-            Download: `shelley_linux_amd64`
+            **Downloads:**
+            - Linux: `shelley_linux_amd64`, `shelley_linux_arm64`
+            - macOS: `shelley_darwin_amd64`, `shelley_darwin_arm64`
