@@ -25,10 +25,8 @@ jobs:
       - name: Generate version tag
         id: version
         run: |
-          # Get commit count as version number
           COUNT=$(git rev-list --count HEAD)
           SHORT_SHA=$(git rev-parse --short=6 HEAD)
-          # Convert 6-char hex SHA to octal, prefixed with 9 to ensure valid semver
           SHA_OCTAL=$(printf '%o' "0x${SHORT_SHA}")
           VERSION="0.${COUNT}.9${SHA_OCTAL}"
           TAG="v${VERSION}"
@@ -37,7 +35,6 @@ jobs:
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
 
-          # Create and push tag
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "${TAG}" -m "Release ${TAG} (${SHORT_SHA})"
@@ -84,3 +81,39 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+
+  macos-app:
+    needs: goreleaser
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download darwin binary from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ needs.goreleaser.outputs.tag }}" \
+            -p "shelley_darwin_${{ matrix.arch }}" \
+            -D .
+
+      - name: Build DMG
+        run: |
+          chmod +x scripts/build-macos-dmg.sh
+          ./scripts/build-macos-dmg.sh "${{ matrix.arch }}" \
+            "shelley_darwin_${{ matrix.arch }}" \
+            "${{ needs.goreleaser.outputs.version }}"
+
+      - name: Upload DMG to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.goreleaser.outputs.tag }}" \
+            "Shelley_darwin_${{ matrix.arch }}.dmg" \
+            --clobber

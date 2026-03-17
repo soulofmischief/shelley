@@ -9,8 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    # Skip on upstream repo
+  build:
     if: github.repository != 'boldsoftware/shelley'
     runs-on: ubuntu-latest
     steps:
@@ -46,18 +45,71 @@ jobs:
             tar -czf "templates/$name.tar.gz" -C "templates/$name" --exclude='.DS_Store' .
           done
 
-      - name: Build binaries
+      - name: Generate version string
+        id: version
         run: |
           VERSION="dev-$(git rev-list --count HEAD)-$(git rev-parse --short=6 HEAD)"
-          LDFLAGS="-s -w -X shelley.exe.dev/version.Version=${VERSION}"
-          
-          # Linux
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build binaries
+        run: |
+          LDFLAGS="-s -w -X shelley.exe.dev/version.Version=${{ steps.version.outputs.version }}"
+
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$LDFLAGS" -o shelley_linux_amd64 ./cmd/shelley
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$LDFLAGS" -o shelley_linux_arm64 ./cmd/shelley
-          
-          # macOS
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "$LDFLAGS" -o shelley_darwin_amd64 ./cmd/shelley
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o shelley_darwin_arm64 ./cmd/shelley
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: shelley_*
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+  macos-app:
+    needs: build
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+
+      - name: Build DMG
+        run: |
+          chmod +x scripts/build-macos-dmg.sh
+          ./scripts/build-macos-dmg.sh "${{ matrix.arch }}" \
+            "shelley_darwin_${{ matrix.arch }}" \
+            "${{ needs.build.outputs.version }}"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: dmg-${{ matrix.arch }}
+          path: Shelley_darwin_${{ matrix.arch }}.dmg
+
+  release:
+    needs: [build, macos-app]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dmg-amd64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dmg-arm64
 
       - name: Create/update dev release
         uses: softprops/action-gh-release@v2
@@ -70,9 +122,12 @@ jobs:
             shelley_linux_arm64
             shelley_darwin_amd64
             shelley_darwin_arm64
+            Shelley_darwin_amd64.dmg
+            Shelley_darwin_arm64.dmg
           body: |
             Latest dev build from commit ${{ github.sha }}
             
             **Downloads:**
             - Linux: `shelley_linux_amd64`, `shelley_linux_arm64`
-            - macOS: `shelley_darwin_amd64`, `shelley_darwin_arm64`
+            - macOS binary: `shelley_darwin_amd64`, `shelley_darwin_arm64`
+            - macOS app (DMG): `Shelley_darwin_amd64.dmg`, `Shelley_darwin_arm64.dmg`
