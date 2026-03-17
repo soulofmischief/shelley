@@ -24,7 +24,7 @@ builds:
 archives:
   - id: shelley
     formats:
-      - binary
+      - tar.gz
     name_template: >-
       {{ .ProjectName }}_
       {{- .Os }}_

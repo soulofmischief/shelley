@@ -95,25 +95,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download darwin binary from release
+      - name: Download darwin archive from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release download "${{ needs.goreleaser.outputs.tag }}" \
-            -p "shelley_darwin_${{ matrix.arch }}" \
+            -p "shelley_darwin_${{ matrix.arch }}.tar.gz" \
             -D .
 
-      - name: Build DMG
+      - name: Build DMG and app zip
         run: |
+          tar -xzf "shelley_darwin_${{ matrix.arch }}.tar.gz"
           chmod +x scripts/build-macos-dmg.sh
           ./scripts/build-macos-dmg.sh "${{ matrix.arch }}" \
-            "shelley_darwin_${{ matrix.arch }}" \
+            shelley \
             "${{ needs.goreleaser.outputs.version }}"
 
-      - name: Upload DMG to release
+      - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ needs.goreleaser.outputs.tag }}" \
             "Shelley_darwin_${{ matrix.arch }}.dmg" \
+            "Shelley_darwin_${{ matrix.arch }}.app.zip" \
             --clobber

@@ -12,6 +12,7 @@ PKG_DIR="$REPO_ROOT/packaging/macos"
 APP_NAME="Shelley"
 BUNDLE="${APP_NAME}.app"
 DMG_NAME="${APP_NAME}_darwin_${ARCH}.dmg"
+ZIP_NAME="${APP_NAME}_darwin_${ARCH}.app.zip"
 
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
@@ -45,6 +46,12 @@ chmod +x "$APP/Contents/MacOS/$APP_NAME"
 
 cp "$BINARY" "$APP/Contents/MacOS/shelley-server"
 chmod +x "$APP/Contents/MacOS/shelley-server"
+
+# --- Create .app.zip ---------------------------------------------------------
+
+ditto -c -k --sequesterRsrc "$APP" "$WORK_DIR/$ZIP_NAME"
+cp "$WORK_DIR/$ZIP_NAME" .
+echo "Created $ZIP_NAME"
 
 # --- Create DMG ---------------------------------------------------------------
 
