@@ -1,4 +1,4 @@
-name: Fork Release
+name: Release
 
 on:
   push:
@@ -13,12 +13,12 @@ jobs:
     if: github.repository != 'boldsoftware/shelley'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.24'
           cache: true
@@ -29,7 +29,7 @@ jobs:
           version: 9
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: 'pnpm'
@@ -64,7 +64,7 @@ jobs:
           done
 
       - name: Upload archives
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: archives
           path: shelley_*.tar.gz
@@ -79,9 +79,9 @@ jobs:
       matrix:
         arch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: archives
 
@@ -94,7 +94,7 @@ jobs:
             "${{ needs.build.outputs.version }}"
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: macos-${{ matrix.arch }}
           path: Shelley_darwin_${{ matrix.arch }}.*
@@ -103,15 +103,15 @@ jobs:
     needs: [build, macos-app]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: archives
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: macos-amd64
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: macos-arm64
 
@@ -126,17 +126,17 @@ jobs:
             shelley_linux_arm64.tar.gz
             shelley_darwin_amd64.tar.gz
             shelley_darwin_arm64.tar.gz
-            Shelley_darwin_amd64.app.zip
-            Shelley_darwin_arm64.app.zip
+            Shelley_darwin_amd64.zip
+            Shelley_darwin_arm64.zip
             Shelley_darwin_amd64.dmg
             Shelley_darwin_arm64.dmg
           body: |
             Dev build from commit ${{ github.sha }}
             
-            **Downloads:**
-            | Platform | Binary | App |
-            |----------|--------|-----|
-            | Linux amd64 | `shelley_linux_amd64.tar.gz` | |
-            | Linux arm64 | `shelley_linux_arm64.tar.gz` | |
-            | macOS Intel | `shelley_darwin_amd64.tar.gz` | [DMG](Shelley_darwin_amd64.dmg) · [App](Shelley_darwin_amd64.app.zip) |
-            | macOS Apple Silicon | `shelley_darwin_arm64.tar.gz` | [DMG](Shelley_darwin_arm64.dmg) · [App](Shelley_darwin_arm64.app.zip) |
+            **Linux**
+            - `shelley_linux_amd64.tar.gz`
+            - `shelley_linux_arm64.tar.gz`
+            
+            **macOS**
+            - `shelley_darwin_amd64.tar.gz` · `Shelley_darwin_amd64.zip` · `Shelley_darwin_amd64.dmg`
+            - `shelley_darwin_arm64.tar.gz` · `Shelley_darwin_arm64.zip` · `Shelley_darwin_arm64.dmg`

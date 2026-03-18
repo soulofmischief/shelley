@@ -27,7 +27,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.branch || github.event.workflow_run.head_branch || 'main' }}
@@ -41,7 +41,7 @@ jobs:
 
       - name: Download existing pages artifact
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: github-pages
           path: _existing
@@ -58,10 +58,8 @@ jobs:
         run: |
           BRANCH="${{ steps.branch.outputs.branch }}"
           if [ "$BRANCH" = "main" ]; then
-            # Main branch goes to root
             python3 scripts/generate-version-metadata.py _site
           else
-            # Other branches go to subdirectory
             python3 scripts/generate-version-metadata.py "_site/${BRANCH}"
           fi
 

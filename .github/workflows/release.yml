@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -41,7 +41,7 @@ jobs:
           git push origin "${TAG}"
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.24'
           cache: true
@@ -52,7 +52,7 @@ jobs:
           version: 9
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: 'pnpm'
@@ -73,7 +73,7 @@ jobs:
           done
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> v2"
@@ -93,7 +93,7 @@ jobs:
       matrix:
         arch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download darwin archive from release
         env:
@@ -117,5 +117,5 @@ jobs:
         run: |
           gh release upload "${{ needs.goreleaser.outputs.tag }}" \
             "Shelley_darwin_${{ matrix.arch }}.dmg" \
-            "Shelley_darwin_${{ matrix.arch }}.app.zip" \
+            "Shelley_darwin_${{ matrix.arch }}.zip" \
             --clobber

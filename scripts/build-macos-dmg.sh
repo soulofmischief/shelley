@@ -12,7 +12,7 @@ PKG_DIR="$REPO_ROOT/packaging/macos"
 APP_NAME="Shelley"
 BUNDLE="${APP_NAME}.app"
 DMG_NAME="${APP_NAME}_darwin_${ARCH}.dmg"
-ZIP_NAME="${APP_NAME}_darwin_${ARCH}.app.zip"
+ZIP_NAME="${APP_NAME}_darwin_${ARCH}.zip"
 
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
