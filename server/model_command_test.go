@@ -47,6 +47,23 @@ func TestRoundModelReasoningLevel(t *testing.T) {
 	}
 }
 
+func TestValidateAdvancedModelRequestOptions(t *testing.T) {
+	capable := &ModelInfo{ID: "gpt-5.6-sol", SupportsProMode: true, SupportsFastMode: true}
+	options := db.ConversationOptions{ReasoningMode: llm.ReasoningModePro, ServiceTier: llm.ServiceTierFast}
+	if got := validateConversationOptions(options); got != "" {
+		t.Fatalf("validateConversationOptions: %s", got)
+	}
+	if got := validateModelRequestOptions(capable, options); got != "" {
+		t.Fatalf("validateModelRequestOptions: %s", got)
+	}
+	if got := validateModelRequestOptions(&ModelInfo{ID: "gpt-5.5"}, options); !strings.Contains(got, "Pro mode") {
+		t.Fatalf("unsupported Pro mode error = %q", got)
+	}
+	if got := validateModelRequestOptions(&ModelInfo{ID: "gpt-5.6-sol", SupportsProMode: true}, options); !strings.Contains(got, "Fast mode") {
+		t.Fatalf("unsupported Fast mode error = %q", got)
+	}
+}
+
 func TestModelCommandStatusListsPerModelLevels(t *testing.T) {
 	status := modelCommandStatus("model-a", "", []ModelInfo{
 		{ID: "model-a", Ready: true, SupportsReasoning: true, ReasoningLevels: []string{"off", "high", "max"}},

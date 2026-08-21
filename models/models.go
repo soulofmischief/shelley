@@ -527,6 +527,14 @@ func (l *loggingService) SupportedReasoningLevels() []llm.ThinkingLevel {
 	return llm.SupportedReasoningLevels(l.service)
 }
 
+func (l *loggingService) SupportsReasoningMode(mode string) bool {
+	return llm.SupportsReasoningMode(l.service, mode)
+}
+
+func (l *loggingService) SupportsServiceTier(tier string) bool {
+	return llm.SupportsServiceTier(l.service, tier)
+}
+
 // DefaultReasoningLevel forwards the wrapped service's default reasoning level
 // so the llm.DefaultReasoner assertion survives the logging wrapper.
 func (l *loggingService) DefaultReasoningLevel() string {

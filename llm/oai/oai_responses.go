@@ -56,6 +56,7 @@ type responsesRequest struct {
 	ToolChoice        any                  `json:"tool_choice,omitempty"`
 	ParallelToolCalls bool                 `json:"parallel_tool_calls,omitempty"`
 	MaxOutputTokens   int                  `json:"max_output_tokens,omitempty"`
+	ServiceTier       string               `json:"service_tier,omitempty"`
 	Reasoning         *responsesReasoning  `json:"reasoning,omitempty"`
 	Include           []string             `json:"include,omitempty"`
 	PromptCacheKey    string               `json:"prompt_cache_key,omitempty"`
@@ -64,6 +65,7 @@ type responsesRequest struct {
 
 type responsesReasoning struct {
 	Effort  string `json:"effort,omitempty"`  // "low", "medium", "high"
+	Mode    string `json:"mode,omitempty"`    // "pro" for GPT-5.6 Pro mode
 	Summary string `json:"summary,omitempty"` // "auto": include reasoning summaries in the output
 }
 
@@ -520,6 +522,18 @@ func (s *ResponsesService) SupportedReasoningLevels() []llm.ThinkingLevel {
 	return advertisedReasoningLevels(caps, found)
 }
 
+func (s *ResponsesService) SupportsReasoningMode(mode string) bool {
+	if mode != llm.ReasoningModePro || !s.isOpenAIResponses() {
+		return false
+	}
+	model := cmp.Or(s.Model, DefaultModel)
+	return strings.HasPrefix(model.ModelName, "gpt-5.6-") || model.ModelName == "gpt-5.6"
+}
+
+func (s *ResponsesService) SupportsServiceTier(tier string) bool {
+	return tier == llm.ServiceTierFast && s.isOpenAIResponses()
+}
+
 // SupportsImages reports whether this service accepts image inputs.
 // OpenAI Responses API supports images for vision models; set
 // Model.SupportsImages to enable image inputs.
@@ -606,6 +620,12 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 		Tools:           tools,
 		MaxOutputTokens: cmp.Or(s.MaxTokens, DefaultMaxTokens),
 	}
+	if ir.ServiceTier != "" {
+		if !s.SupportsServiceTier(ir.ServiceTier) {
+			return nil, fmt.Errorf("service tier %q is not supported by %s", ir.ServiceTier, model.ModelName)
+		}
+		req.ServiceTier = ir.ServiceTier
+	}
 	if openAIResponses {
 		req.Include = []string{"reasoning.encrypted_content"}
 		req.ToolChoice = "auto"
@@ -661,6 +681,15 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 		if s.supportsReasoningSummaries() {
 			req.Reasoning.Summary = "auto"
 		}
+	}
+	if ir.ReasoningMode != "" {
+		if !s.SupportsReasoningMode(ir.ReasoningMode) {
+			return nil, fmt.Errorf("reasoning mode %q is not supported by %s", ir.ReasoningMode, model.ModelName)
+		}
+		if req.Reasoning == nil {
+			req.Reasoning = &responsesReasoning{}
+		}
+		req.Reasoning.Mode = ir.ReasoningMode
 	}
 
 	// Add tool choice if specified

@@ -259,6 +259,11 @@ type ConversationOptions struct {
 	// One of "off", "minimal", "low", "medium", "high", "xhigh". Empty string
 	// means "use the service default". See llm.ParseThinkingLevel.
 	ThinkingLevel string `json:"thinking_level,omitempty"`
+	// ReasoningMode is independent of effort. "pro" enables GPT-5.6 Pro mode.
+	ReasoningMode string `json:"reasoning_mode,omitempty"`
+	// ServiceTier selects the provider processing tier. "fast" opts into
+	// OpenAI Fast mode.
+	ServiceTier string `json:"service_tier,omitempty"`
 	// DisableNotifications suppresses end-of-turn notifications (push, email,
 	// discord, ntfy) for this conversation. Useful for cron-style or
 	// self-invoked conversations that shouldn't ping the user.

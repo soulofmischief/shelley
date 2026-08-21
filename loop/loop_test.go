@@ -35,6 +35,8 @@ func TestNewLoop(t *testing.T) {
 		History:       history,
 		Tools:         tools,
 		RecordMessage: recordFunc,
+		ReasoningMode: llm.ReasoningModePro,
+		ServiceTier:   llm.ServiceTierFast,
 	})
 	if loop == nil {
 		t.Fatal("NewLoop returned nil")
@@ -46,6 +48,9 @@ func TestNewLoop(t *testing.T) {
 
 	if len(loop.messageQueue) != 0 {
 		t.Errorf("expected empty message queue, got %d", len(loop.messageQueue))
+	}
+	if loop.reasoningMode != llm.ReasoningModePro || loop.serviceTier != llm.ServiceTierFast {
+		t.Fatalf("request options = (%q, %q)", loop.reasoningMode, loop.serviceTier)
 	}
 }
 

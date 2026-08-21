@@ -41,6 +41,29 @@ type ReasoningSupporter interface {
 	SupportedReasoningLevels() []ThinkingLevel
 }
 
+// RequestOptionSupporter reports optional request controls supported by a
+// service. Callers use this to expose controls only when the selected backend
+// can honor them.
+type RequestOptionSupporter interface {
+	SupportsReasoningMode(string) bool
+	SupportsServiceTier(string) bool
+}
+
+const (
+	ReasoningModePro = "pro"
+	ServiceTierFast  = "fast"
+)
+
+func SupportsReasoningMode(svc Service, mode string) bool {
+	capable, ok := svc.(RequestOptionSupporter)
+	return ok && capable.SupportsReasoningMode(mode)
+}
+
+func SupportsServiceTier(svc Service, tier string) bool {
+	capable, ok := svc.(RequestOptionSupporter)
+	return ok && capable.SupportsServiceTier(tier)
+}
+
 func SupportsReasoning(svc Service) bool {
 	if rs, ok := svc.(ReasoningSupporter); ok {
 		return rs.SupportsReasoning()
@@ -200,6 +223,12 @@ type Request struct {
 	// ReasoningEffort is an optional provider-verbatim request override used by
 	// custom-model level mappings (for example mapping off to "none").
 	ReasoningEffort string
+	// ReasoningMode selects an execution mode independent of reasoning effort.
+	// OpenAI GPT-5.6 supports "pro".
+	ReasoningMode string
+	// ServiceTier selects a provider processing tier. OpenAI accepts "fast" to
+	// opt into Fast mode.
+	ServiceTier string
 	// OnStream is called with each streaming delta as the LLM generates content.
 	// If nil, no streaming callbacks are made. The full response is still returned from Do.
 	OnStream func(StreamDelta) `json:"-"`

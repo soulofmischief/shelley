@@ -1172,6 +1172,10 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 				http.Error(w, msg, http.StatusBadRequest)
 				return
 			}
+			if msg := validateModelRequestOptions(findModelInfo(modelID, s.getModelList()), *req.ConversationOptions); msg != "" {
+				http.Error(w, msg, http.StatusBadRequest)
+				return
+			}
 		}
 		var cwdOverride, modelOverride *string
 		if req.Cwd != "" {
@@ -1415,6 +1419,10 @@ func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if msg := validateModelReasoningLevel(findModelInfo(modelID, s.getModelList()), convOpts.ThinkingLevel); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		if msg := validateModelRequestOptions(findModelInfo(modelID, s.getModelList()), convOpts); msg != "" {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
@@ -2420,6 +2428,8 @@ type ModelInfo struct {
 	SupportsImages    bool     `json:"supports_images"`
 	SupportsReasoning bool     `json:"supports_reasoning"`
 	ReasoningLevels   []string `json:"reasoning_levels,omitempty"`
+	SupportsProMode   bool     `json:"supports_pro_mode,omitempty"`
+	SupportsFastMode  bool     `json:"supports_fast_mode,omitempty"`
 	// DefaultReasoningLevel is the reasoning level a conversation gets when it
 	// carries no explicit thinking_level override. Lets the UI label
 	// conversations honestly (e.g. "Reasoning medium") instead of leaving the
@@ -2753,6 +2763,10 @@ func (s *Server) getModelList() []ModelInfo {
 				defaultReasoning = llm.ServiceDefaultReasoningLevel(svc)
 			}
 			info := ModelInfo{ID: id, Ready: err == nil, MaxContextTokens: maxCtx, SupportsImages: supportsImages, SupportsReasoning: supportsReasoning, ReasoningLevels: reasoningLevels, DefaultReasoningLevel: defaultReasoning}
+			if err == nil && svc != nil {
+				info.SupportsProMode = llm.SupportsReasoningMode(svc, llm.ReasoningModePro)
+				info.SupportsFastMode = llm.SupportsServiceTier(svc, llm.ServiceTierFast)
+			}
 			// Add display name and source from model info
 			if modelInfo := s.llmManager.GetModelInfo(id); modelInfo != nil {
 				info.DisplayName = modelInfo.DisplayName
@@ -4049,6 +4063,23 @@ func validateModelReasoningLevel(model *ModelInfo, level string) string {
 	return fmt.Sprintf("Model %s does not support reasoning level %s; choose one of: %s.", model.ID, level, strings.Join(model.ReasoningLevels, ", "))
 }
 
+func validateModelRequestOptions(model *ModelInfo, opts db.ConversationOptions) string {
+	if opts.ReasoningMode == llm.ReasoningModePro && (model == nil || !model.SupportsProMode) {
+		return fmt.Sprintf("Model %s does not support Pro mode.", modelName(model))
+	}
+	if opts.ServiceTier == llm.ServiceTierFast && (model == nil || !model.SupportsFastMode) {
+		return fmt.Sprintf("Model %s does not support Fast mode.", modelName(model))
+	}
+	return ""
+}
+
+func modelName(model *ModelInfo) string {
+	if model == nil || model.ID == "" {
+		return "selection"
+	}
+	return model.ID
+}
+
 func validateConversationOptions(opts db.ConversationOptions) string {
 	for name, v := range opts.ToolOverrides {
 		if v != "on" && v != "off" {
@@ -4066,6 +4097,12 @@ func validateConversationOptions(opts db.ConversationOptions) string {
 		default:
 			return fmt.Sprintf("Invalid thinking_level: %q; must be one of off, minimal, low, medium, high, xhigh, max", opts.ThinkingLevel)
 		}
+	}
+	if opts.ReasoningMode != "" && opts.ReasoningMode != llm.ReasoningModePro {
+		return fmt.Sprintf("Invalid reasoning_mode: %q; must be pro", opts.ReasoningMode)
+	}
+	if opts.ServiceTier != "" && opts.ServiceTier != llm.ServiceTierFast {
+		return fmt.Sprintf("Invalid service_tier: %q; must be fast", opts.ServiceTier)
 	}
 	return ""
 }
@@ -4117,6 +4154,10 @@ func (s *Server) handleCreateDraft(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if msg := validateModelReasoningLevel(findModelInfo(modelID, s.getModelList()), convOpts.ThinkingLevel); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		if msg := validateModelRequestOptions(findModelInfo(modelID, s.getModelList()), convOpts); msg != "" {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}

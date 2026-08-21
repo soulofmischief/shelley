@@ -1358,6 +1358,53 @@ func TestResponsesServiceReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestResponsesServiceAdvancedRequestOptions(t *testing.T) {
+	var got responsesRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(responsesResponse{
+			ID: "r", Status: "completed",
+			Output: []responsesOutputItem{{Type: "message", Role: "assistant", Content: []responsesContent{{Type: "output_text", Text: "ok"}}}},
+			Usage:  responsesUsage{InputTokens: 1, OutputTokens: 1},
+		})
+	}))
+	defer server.Close()
+
+	svc := &ResponsesService{APIKey: "k", Model: GPT56Sol, ModelURL: server.URL}
+	_, err := svc.Do(context.Background(), &llm.Request{
+		Messages:      []llm.Message{llm.UserStringMessage("hi")},
+		ReasoningMode: llm.ReasoningModePro,
+		ServiceTier:   llm.ServiceTierFast,
+	})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if got.Reasoning == nil || got.Reasoning.Mode != llm.ReasoningModePro {
+		t.Fatalf("reasoning = %+v", got.Reasoning)
+	}
+	if got.ServiceTier != llm.ServiceTierFast {
+		t.Fatalf("service_tier = %q", got.ServiceTier)
+	}
+}
+
+func TestResponsesServiceAdvancedRequestCapabilities(t *testing.T) {
+	gpt56 := &ResponsesService{Model: GPT56Sol, ProviderName: "openai"}
+	if !gpt56.SupportsReasoningMode(llm.ReasoningModePro) || !gpt56.SupportsServiceTier(llm.ServiceTierFast) {
+		t.Fatal("GPT-5.6 OpenAI Responses service should support Pro and Fast modes")
+	}
+	gpt55 := &ResponsesService{Model: GPT55, ProviderName: "openai"}
+	if gpt55.SupportsReasoningMode(llm.ReasoningModePro) || !gpt55.SupportsServiceTier(llm.ServiceTierFast) {
+		t.Fatal("GPT-5.5 should support Fast mode without Pro mode")
+	}
+	xai := &ResponsesService{Model: Grok45, ProviderName: "xai"}
+	if xai.SupportsReasoningMode(llm.ReasoningModePro) || xai.SupportsServiceTier(llm.ServiceTierFast) {
+		t.Fatal("xAI Responses service should not advertise OpenAI request options")
+	}
+}
+
 // TestResponsesServiceRequestLevelThinking verifies that a non-default
 // Request.ThinkingLevel overrides both the service ThinkingLevel and the
 // service ReasoningEffort verbatim string.

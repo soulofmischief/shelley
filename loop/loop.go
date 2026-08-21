@@ -55,6 +55,8 @@ type Config struct {
 	// issues. Per-conversation override; ThinkingLevelDefault means "use the
 	// service default".
 	ThinkingLevel llm.ThinkingLevel
+	ReasoningMode string
+	ServiceTier   string
 	// GetWorkingDir returns the current working directory for tools.
 	// If set, this is called at end of turn to check for git state changes.
 	// If nil, Config.WorkingDir is used as a static value.
@@ -102,6 +104,8 @@ type Loop struct {
 	onStreamDone     func()
 	injectMessages   func(ctx context.Context) []llm.Message
 	thinkingLevel    llm.ThinkingLevel
+	reasoningMode    string
+	serviceTier      string
 	notify           chan struct{} // signaled when a message is queued or retry requested
 	retryPending     bool          // set by Retry() to re-run processLLMRequest with current history
 }
@@ -138,6 +142,8 @@ func NewLoop(config Config) *Loop {
 		onStreamDone:     config.OnStreamDone,
 		injectMessages:   config.InjectMessages,
 		thinkingLevel:    config.ThinkingLevel,
+		reasoningMode:    config.ReasoningMode,
+		serviceTier:      config.ServiceTier,
 		notify:           make(chan struct{}, 1),
 	}
 }
@@ -374,6 +380,8 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 			Tools:         tools,
 			System:        system,
 			ThinkingLevel: l.thinkingLevel,
+			ReasoningMode: l.reasoningMode,
+			ServiceTier:   l.serviceTier,
 			OnStream:      l.onStreamDelta,
 			OnRetry:       l.recordRetryWarning(ctx),
 		}

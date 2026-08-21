@@ -2004,6 +2004,8 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 		History:       history,
 		Tools:         toolSet.Tools(),
 		ThinkingLevel: llm.ParseThinkingLevel(conversationOpts.ThinkingLevel),
+		ReasoningMode: conversationOpts.ReasoningMode,
+		ServiceTier:   conversationOpts.ServiceTier,
 		RecordMessage: recordMessage,
 		RecordWarning: func(ctx context.Context, text string) error {
 			return cm.recordWarning(ctx, text)
