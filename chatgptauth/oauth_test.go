@@ -1,0 +1,215 @@
+package chatgptauth
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+type memoryStore struct {
+	mu          sync.Mutex
+	credentials Credentials
+	loaded      bool
+}
+
+func (s *memoryStore) LoadChatGPTCredentials(context.Context) (Credentials, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.loaded {
+		return Credentials{}, ErrNotAuthenticated
+	}
+	return s.credentials, nil
+}
+
+func (s *memoryStore) SaveChatGPTCredentials(_ context.Context, credentials Credentials) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.credentials = credentials
+	s.loaded = true
+	return nil
+}
+
+func (s *memoryStore) DeleteChatGPTCredentials(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.credentials = Credentials{}
+	s.loaded = false
+	return nil
+}
+
+func TestStartFlowUsesCodexPKCEContract(t *testing.T) {
+	now := time.Date(2026, 8, 21, 1, 0, 0, 0, time.UTC)
+	manager := NewManager(&memoryStore{}, Config{Now: func() time.Time { return now }})
+
+	flow, err := manager.StartFlow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(flow.AuthorizationURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	if parsed.Scheme+"://"+parsed.Host+parsed.Path != DefaultIssuer+"/oauth/authorize" {
+		t.Fatalf("authorization URL = %q", flow.AuthorizationURL)
+	}
+	for key, want := range map[string]string{
+		"response_type":              "code",
+		"client_id":                  DefaultClientID,
+		"redirect_uri":               DefaultRedirectURI,
+		"scope":                      defaultScopes,
+		"code_challenge_method":      "S256",
+		"id_token_add_organizations": "true",
+		"codex_cli_simplified_flow":  "true",
+		"originator":                 "shelley",
+	} {
+		if got := query.Get(key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if query.Get("state") != flow.State || query.Get("code_challenge") == "" {
+		t.Fatalf("flow state/challenge missing: %+v", flow)
+	}
+	if flow.ExpiresAt != now.Add(pendingFlowTTL).Format(time.RFC3339) {
+		t.Fatalf("expires_at = %q", flow.ExpiresAt)
+	}
+}
+
+func TestCompleteFlowPersistsCredentialsFromPastedCallback(t *testing.T) {
+	now := time.Date(2026, 8, 21, 1, 0, 0, 0, time.UTC)
+	accountID := "account-123"
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/oauth/token" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if r.Form.Get("grant_type") != "authorization_code" || r.Form.Get("code_verifier") == "" {
+			t.Fatalf("token form = %v", r.Form)
+		}
+		json.NewEncoder(w).Encode(tokenResponse{
+			AccessToken:  jwt(t, map[string]any{"exp": now.Add(time.Hour).Unix()}),
+			RefreshToken: "refresh-1",
+			IDToken: jwt(t, map[string]any{
+				"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": accountID},
+			}),
+			ExpiresIn: 3600,
+		})
+	}))
+	defer issuer.Close()
+
+	store := &memoryStore{}
+	manager := NewManager(store, Config{Issuer: issuer.URL, HTTPClient: issuer.Client(), Now: func() time.Time { return now }})
+	flow, err := manager.StartFlow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	callback := DefaultRedirectURI + "?code=authorization-code&state=" + url.QueryEscape(flow.State)
+	credentials, err := manager.CompleteFlow(context.Background(), callback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentials.AccountID != accountID || credentials.RefreshToken != "refresh-1" {
+		t.Fatalf("credentials = %+v", credentials)
+	}
+	if !credentials.ExpiresAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("expires_at = %s", credentials.ExpiresAt)
+	}
+}
+
+func TestAuthenticatedTransportRefreshesOnceOnUnauthorized(t *testing.T) {
+	now := time.Date(2026, 8, 21, 1, 0, 0, 0, time.UTC)
+	store := &memoryStore{loaded: true, credentials: Credentials{
+		AccessToken: "old-access", RefreshToken: "refresh-1", IDToken: jwt(t, map[string]any{"chatgpt_account_id": "account-123"}),
+		AccountID: "account-123", ExpiresAt: now.Add(time.Hour),
+	}}
+	var mu sync.Mutex
+	refreshes := 0
+	requests := 0
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth/token" {
+			mu.Lock()
+			refreshes++
+			mu.Unlock()
+			if r.Header.Get("Content-Type") != "application/json" {
+				t.Fatalf("refresh content type = %q", r.Header.Get("Content-Type"))
+			}
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), `"refresh_token":"refresh-1"`) {
+				t.Fatalf("refresh body = %s", body)
+			}
+			json.NewEncoder(w).Encode(tokenResponse{AccessToken: "new-access", ExpiresIn: 3600})
+			return
+		}
+
+		mu.Lock()
+		requests++
+		requestNumber := requests
+		mu.Unlock()
+		if r.Header.Get("ChatGPT-Account-ID") != "account-123" || r.Header.Get("originator") != "shelley" {
+			t.Fatalf("auth headers = %v", r.Header)
+		}
+		if requestNumber == 1 {
+			if r.Header.Get("Authorization") != "Bearer old-access" {
+				t.Fatalf("first authorization = %q", r.Header.Get("Authorization"))
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer new-access" {
+			t.Fatalf("retry authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer issuer.Close()
+
+	manager := NewManager(store, Config{Issuer: issuer.URL, HTTPClient: issuer.Client(), Now: func() time.Time { return now }})
+	response, err := manager.HTTPClient(issuer.Client()).Get(issuer.URL + "/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent || refreshes != 1 || requests != 2 {
+		t.Fatalf("status=%d refreshes=%d requests=%d", response.StatusCode, refreshes, requests)
+	}
+	stored, err := store.LoadChatGPTCredentials(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.RefreshToken != "refresh-1" {
+		t.Fatalf("rotated response erased refresh token: %+v", stored)
+	}
+}
+
+func TestAccountIDFromTokensSupportsKnownClaimShapes(t *testing.T) {
+	for name, claims := range map[string]map[string]any{
+		"namespaced string": {"https://api.openai.com/auth/account_id": "account-a"},
+		"top level":         {"chatgpt_account_id": "account-a"},
+		"auth object":       {"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "account-a"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := accountIDFromTokens(jwt(t, claims)); got != "account-a" {
+				t.Fatalf("account ID = %q", got)
+			}
+		})
+	}
+}
+
+func jwt(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`)) + "." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+}

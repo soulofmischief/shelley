@@ -738,6 +738,31 @@ func TestResponsesServiceDoSendsMaxOutputTokens(t *testing.T) {
 	}
 }
 
+func TestResponsesServiceCanOmitMaxOutputTokens(t *testing.T) {
+	var request map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"r1","status":"completed","output":[],"usage":{}}`)
+	}))
+	defer server.Close()
+
+	svc := &ResponsesService{
+		APIKey:              "test-api-key",
+		Model:               GPT56Sol,
+		ModelURL:            server.URL,
+		OmitMaxOutputTokens: true,
+	}
+	if _, err := svc.Do(context.Background(), &llm.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := request["max_output_tokens"]; present {
+		t.Fatalf("request unexpectedly contains max_output_tokens: %v", request)
+	}
+}
+
 func TestResponsesServiceDo(t *testing.T) {
 	// Create a mock Responses server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -34,6 +35,12 @@ type ResponsesService struct {
 	ThinkingLevel llm.ThinkingLevel // service-level default; zero (ThinkingLevelDefault) and ThinkingLevelOff both leave the field off the wire
 	ProviderName  string            // e.g., "openai"
 	Backoff       []time.Duration   // retry backoff durations; defaults to {1s, 2s, 5s, ...} if nil
+	// OmitMaxOutputTokens is required by Responses-compatible providers that
+	// reject OpenAI's max_output_tokens request field, including ChatGPT Codex.
+	OmitMaxOutputTokens bool
+	// ReasoningLevels overrides models.dev capability lookup when a provider's
+	// authenticated model catalog supplies an exact list.
+	ReasoningLevels []llm.ThinkingLevel
 
 	// ReasoningEffort, if non-empty, is used as the reasoning.effort value sent to
 	// the OpenAI Responses API verbatim, overriding ThinkingLevel. This allows
@@ -518,6 +525,9 @@ func (s *ResponsesService) SupportsReasoning() bool {
 // Nil means the model has no exact effort metadata and callers use the
 // historical provider fallback.
 func (s *ResponsesService) SupportedReasoningLevels() []llm.ThinkingLevel {
+	if len(s.ReasoningLevels) > 0 {
+		return slices.Clone(s.ReasoningLevels)
+	}
 	caps, found := modelReasoningCapabilities(s.ModelURL, cmp.Or(s.Model, DefaultModel))
 	return advertisedReasoningLevels(caps, found)
 }
@@ -619,6 +629,9 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 		Input:           allInput,
 		Tools:           tools,
 		MaxOutputTokens: cmp.Or(s.MaxTokens, DefaultMaxTokens),
+	}
+	if s.OmitMaxOutputTokens {
+		req.MaxOutputTokens = 0
 	}
 	if ir.ServiceTier != "" {
 		if !s.SupportsServiceTier(ir.ServiceTier) {
