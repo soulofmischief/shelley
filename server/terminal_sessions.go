@@ -647,12 +647,13 @@ func (t *TerminalSessions) spawnSubprocess(socket, logFile, cwd, command string,
 // until the listener is ready.
 func InProcessSpawner(socket, logFile, cwd, command string, cols, rows uint16, extraEnv []string) (int, error) {
 	ready := make(chan struct{})
+	done := make(chan error, 1)
 	var env []string
 	if len(extraEnv) > 0 {
 		env = append(os.Environ(), extraEnv...)
 	}
 	go func() {
-		_ = dtach.Serve(dtach.ServerOptions{
+		done <- dtach.Serve(dtach.ServerOptions{
 			SocketPath: socket,
 			Command:    "bash",
 			Args:       []string{"--login", "-c", command},
@@ -663,8 +664,12 @@ func InProcessSpawner(socket, logFile, cwd, command string, cols, rows uint16, e
 			Ready:      ready,
 		})
 	}()
-	<-ready
-	return os.Getpid(), nil
+	select {
+	case <-ready:
+		return os.Getpid(), nil
+	case err := <-done:
+		return 0, err
+	}
 }
 
 // LockAttach returns a function that releases the attach mutex. Callers use

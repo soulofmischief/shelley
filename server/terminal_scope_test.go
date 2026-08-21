@@ -18,12 +18,24 @@ import (
 // in-process spawner, so spawned sessions die with the test.
 func newScopeTestSessions(t *testing.T) *TerminalSessions {
 	t.Helper()
-	ts, err := NewTerminalSessions(t.TempDir(), slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	dir, err := os.MkdirTemp("/tmp", "shelley-terminals-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	ts, err := NewTerminalSessions(dir, slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	if err != nil {
 		t.Fatalf("NewTerminalSessions: %v", err)
 	}
 	ts.SetSpawner(InProcessSpawner)
 	return ts
+}
+
+func TestInProcessSpawnerReturnsStartupError(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), strings.Repeat("x", 200)+".sock")
+	if _, err := InProcessSpawner(socket, "", t.TempDir(), "true", 80, 24, nil); err == nil {
+		t.Fatal("expected overlong Unix socket path to fail")
+	}
 }
 
 // spawnScoped starts a long-lived session owned by conversationID ("" for
