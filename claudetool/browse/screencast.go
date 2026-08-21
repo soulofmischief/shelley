@@ -184,6 +184,7 @@ func (b *BrowseTools) screencastStart(format string, quality, maxWidth, maxHeigh
 		"-f", inputFormat,
 		"-framerate", "4",
 		"-i", "pipe:0",
+		"-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
 		"-c:v", "libx264",
 		"-pix_fmt", "yuv420p",
 		"-preset", "fast",

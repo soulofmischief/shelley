@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -237,8 +238,12 @@ func TestExecuteBashInDirUsesSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(output); got != original {
-		t.Fatalf("pwd = %q, want snapshotted directory %q", got, original)
+	want, err := filepath.EvalSymlinks(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(output); got != want {
+		t.Fatalf("pwd = %q, want snapshotted directory %q", got, want)
 	}
 }
 
@@ -545,6 +550,10 @@ func TestFormatForegroundBashOutput(t *testing.T) {
 }
 
 func TestIsNoTrailerSet(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "gitconfig")
+	t.Setenv("GIT_CONFIG_GLOBAL", configPath)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
 	// Test when config is not set (default)
 	t.Run("Default No Config", func(t *testing.T) {
 		if isNoTrailerSet() {

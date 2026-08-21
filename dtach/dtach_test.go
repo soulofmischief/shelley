@@ -2,10 +2,21 @@ package dtach
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func shortSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "shelley-dtach-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "sock")
+}
 
 func TestRingDropsOldest(t *testing.T) {
 	r := newRing(8)
@@ -35,8 +46,7 @@ func serveInBackground(t *testing.T, opts ServerOptions) <-chan error {
 }
 
 func TestServeAttachSurvivesDetach(t *testing.T) {
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "sock")
+	sock := shortSocketPath(t)
 
 	// Use `cat` so the session stays alive until we explicitly signal EOF.
 	// A fast-exiting command would race the test: the session can tear down
@@ -94,8 +104,7 @@ func TestServeAttachSurvivesDetach(t *testing.T) {
 }
 
 func TestAttachReplaysScrollbackToLateClient(t *testing.T) {
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "sock")
+	sock := shortSocketPath(t)
 
 	// Use `cat` so the session stays alive until we send EOF. While running,
 	// any output we feed it should appear in the scrollback for late

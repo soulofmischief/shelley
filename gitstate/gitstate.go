@@ -232,7 +232,7 @@ func getGitStateFromGit(dir string) *GitState {
 		return state
 	}
 	state.IsRepo = true
-	state.Worktree = strings.TrimSpace(string(output))
+	state.Worktree = logicalWorktree(strings.TrimSpace(string(output)), dir)
 
 	// Get the current commit hash (short form)
 	cmd = exec.Command("git", "rev-parse", "--short", "HEAD")
@@ -267,6 +267,43 @@ func getGitStateFromGit(dir string) *GitState {
 	// If symbolic-ref fails, we're in detached HEAD state - branch stays empty
 
 	return state
+}
+
+// logicalWorktree maps Git's physical --show-toplevel result back through the
+// path the caller used. This preserves paths such as macOS /var (whose physical
+// path is /private/var) and user-created workspace symlinks.
+func logicalWorktree(gitRoot, dir string) string {
+	if dir == "" {
+		var err error
+		dir, err = os.Getwd()
+		if err != nil {
+			return gitRoot
+		}
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return gitRoot
+	}
+	physicalDir, err := filepath.EvalSymlinks(absDir)
+	if err != nil {
+		return gitRoot
+	}
+	physicalRoot, err := filepath.EvalSymlinks(gitRoot)
+	if err != nil {
+		return gitRoot
+	}
+	rel, err := filepath.Rel(physicalRoot, physicalDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return gitRoot
+	}
+	logicalRoot := absDir
+	if rel == "." {
+		return logicalRoot
+	}
+	for range strings.Split(rel, string(filepath.Separator)) {
+		logicalRoot = filepath.Dir(logicalRoot)
+	}
+	return logicalRoot
 }
 
 // Equal reports whether g and other represent the same git state.

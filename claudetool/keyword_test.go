@@ -139,8 +139,12 @@ func TestFindRepoRoot(t *testing.T) {
 		t.Errorf("unexpected error when in git repo: %v", err)
 	}
 
-	if root != tmpDir {
-		t.Errorf("expected root %q, got %q", tmpDir, root)
+	want, err := filepath.EvalSymlinks(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root != want {
+		t.Errorf("expected root %q, got %q", want, root)
 	}
 }
 

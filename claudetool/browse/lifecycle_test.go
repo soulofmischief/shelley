@@ -4,7 +4,7 @@ package browse
 
 import (
 	"context"
-	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -76,36 +76,26 @@ func TestBrowserProcessGroupCleanup(t *testing.T) {
 	}
 }
 
-// findDescendantsByPgid returns PIDs whose process group is pgid, by
-// scanning /proc. Includes the leader itself.
+// findDescendantsByPgid returns PIDs whose process group is pgid. ps keeps
+// this test portable across Unix systems, including macOS where /proc is not
+// available. Includes the leader itself.
 func findDescendantsByPgid(t *testing.T, pgid int) []int {
 	t.Helper()
-	entries, err := os.ReadDir("/proc")
+	out, err := exec.Command("ps", "-axo", "pid=,pgid=").Output()
 	if err != nil {
-		t.Fatalf("read /proc: %v", err)
+		t.Fatalf("list process groups: %v", err)
 	}
 	var pids []int
-	for _, e := range entries {
-		pid, err := strconv.Atoi(e.Name())
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
 		if err != nil {
 			continue
 		}
-		stat, err := os.ReadFile("/proc/" + e.Name() + "/stat")
-		if err != nil {
-			continue
-		}
-		// /proc/<pid>/stat: "pid (comm) state ppid pgrp ..."
-		// comm may contain spaces/parens, so find the LAST ')'.
-		s := string(stat)
-		i := strings.LastIndex(s, ")")
-		if i < 0 || i+1 >= len(s) {
-			continue
-		}
-		fields := strings.Fields(s[i+1:])
-		if len(fields) < 3 {
-			continue
-		}
-		got, err := strconv.Atoi(fields[2]) // pgrp
+		got, err := strconv.Atoi(fields[1])
 		if err != nil {
 			continue
 		}
