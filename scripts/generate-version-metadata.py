@@ -5,12 +5,13 @@ Generates release.json, commits.json, and index.html.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 
-def get_headless_shell_release() -> tuple[str, str] | None:
+def get_headless_shell_release(repository: str) -> tuple[str, str] | None:
     """Find the latest headless-shell release from GitHub.
 
     Returns (version_string, tag) like ('Chromium 147.0.7727.24', 'headless-shell/v147.0.7727.24')
@@ -18,26 +19,40 @@ def get_headless_shell_release() -> tuple[str, str] | None:
     """
     import urllib.request
 
-    # List releases and find the latest headless-shell/* tag
-    url = "https://api.github.com/repos/boldsoftware/shelley/releases?per_page=20"
-    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
-    try:
+    # Releases are newest-first. Follow pagination because Shelley releases
+    # frequently enough for browser releases to fall off the first page.
+    url = f"https://api.github.com/repos/{repository}/releases?per_page=100"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "shelley-version-metadata",
+    }
+    if token := os.environ.get("GITHUB_TOKEN"):
+        headers["Authorization"] = f"Bearer {token}"
+    while url:
+        req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as resp:
             releases = json.load(resp)
-    except Exception as e:
-        print(f"  Warning: could not fetch releases: {e}", file=sys.stderr)
-        return None
+            link_header = resp.headers.get("Link", "")
 
-    for release in releases:
-        tag = release.get("tag_name", "")
-        if tag.startswith("headless-shell/v"):
-            version = tag.removeprefix("headless-shell/v")
-            return f"Chromium {version}", tag
+        for release in releases:
+            tag = release.get("tag_name", "")
+            if tag.startswith("headless-shell/v"):
+                version = tag.removeprefix("headless-shell/v")
+                return f"Chromium {version}", tag
+
+        url = None
+        for link in link_header.split(","):
+            target, *params = link.split(";")
+            if any(param.strip() == 'rel="next"' for param in params):
+                url = target.strip().removeprefix("<").removesuffix(">")
+                break
 
     return None
 
 
-def generate_release_json(output_dir: Path) -> None:
+def generate_release_json(
+    output_dir: Path, release_repository: str, headless_shell_repository: str
+) -> None:
     """Generate release.json with latest release information."""
     # Get latest tag - fail if none exists
     result = subprocess.run(
@@ -67,7 +82,7 @@ def generate_release_json(output_dir: Path) -> None:
 
     version = latest_tag[1:] if latest_tag.startswith("v") else latest_tag
 
-    base_url = f"https://github.com/boldsoftware/shelley/releases/download/{latest_tag}"
+    base_url = f"https://github.com/{release_repository}/releases/download/{latest_tag}"
 
     release_info = {
         "tag_name": latest_tag,
@@ -86,10 +101,10 @@ def generate_release_json(output_dir: Path) -> None:
     }
 
     # Find latest headless-shell release (separate release tag namespace)
-    hs = get_headless_shell_release()
+    hs = get_headless_shell_release(headless_shell_repository)
     if hs:
         hs_version, hs_tag = hs
-        hs_base = f"https://github.com/boldsoftware/shelley/releases/download/{hs_tag}"
+        hs_base = f"https://github.com/{headless_shell_repository}/releases/download/{hs_tag}"
         release_info["headless_shell_version"] = hs_version
         release_info["headless_shell_urls"] = {
             "linux_amd64": f"{hs_base}/headless-shell-linux-amd64.tar.gz",
@@ -124,13 +139,13 @@ def generate_commits_json(output_dir: Path, count: int = 500) -> None:
     print(f"Generated {output_path} with {len(commits)} commits")
 
 
-def generate_index_html(output_dir: Path) -> None:
+def generate_index_html(output_dir: Path, release_repository: str) -> None:
     """Generate index.html."""
-    html = """<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head><title>Shelley</title></head>
 <body>
-<p><a href="https://github.com/boldsoftware/shelley">github.com/boldsoftware/shelley</a></p>
+<p><a href="https://github.com/{release_repository}">github.com/{release_repository}</a></p>
 <ul>
 <li><a href="release.json">release.json</a></li>
 <li><a href="commits.json">commits.json</a></li>
@@ -147,10 +162,12 @@ def generate_index_html(output_dir: Path) -> None:
 def main() -> None:
     output_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("_site")
     output_dir.mkdir(parents=True, exist_ok=True)
+    release_repository = os.environ["GITHUB_REPOSITORY"]
+    headless_shell_repository = os.environ["HEADLESS_SHELL_REPOSITORY"]
 
-    generate_release_json(output_dir)
+    generate_release_json(output_dir, release_repository, headless_shell_repository)
     generate_commits_json(output_dir)
-    generate_index_html(output_dir)
+    generate_index_html(output_dir, release_repository)
 
 
 if __name__ == "__main__":

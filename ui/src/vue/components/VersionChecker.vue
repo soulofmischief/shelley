@@ -57,7 +57,7 @@
       <div v-if="versionInfo.has_update" class="version-changelog">
         <h3>
           <a
-            :href="`https://github.com/boldsoftware/shelley/compare/${versionInfo.current_tag}...${versionInfo.latest_tag}`"
+            :href="`${versionInfo.repository_url}/compare/${versionInfo.current_tag}...${versionInfo.latest_tag}`"
             target="_blank"
             rel="noopener noreferrer"
             class="changelog-link"
@@ -69,7 +69,7 @@
         <ul v-else-if="commits.length > 0" class="commit-list">
           <li v-for="commit in commits" :key="commit.sha" class="commit-item">
             <a
-              :href="getCommitUrl(commit.sha)"
+              :href="`${versionInfo.repository_url}/commit/${commit.sha}`"
               target="_blank"
               rel="noopener noreferrer"
               class="commit-sha"
@@ -386,10 +386,6 @@ function formatDateTime(dateStr: string): string {
     minute: "2-digit",
     timeZoneName: "short",
   });
-}
-
-function getCommitUrl(sha: string): string {
-  return `https://github.com/boldsoftware/shelley/commit/${sha}`;
 }
 
 watch(

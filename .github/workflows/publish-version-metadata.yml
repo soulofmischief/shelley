@@ -27,6 +27,9 @@ jobs:
           fetch-depth: 0
 
       - name: Generate version metadata
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEADLESS_SHELL_REPOSITORY: boldsoftware/shelley
         run: python3 scripts/generate-version-metadata.py _site
 
       - name: Upload artifact

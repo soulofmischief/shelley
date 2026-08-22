@@ -3,7 +3,7 @@ name: customizing-shelley
 description: Use when the user wants to change Shelley itself — its code, UI, tools, or behavior beyond what hooks allow — or asks to rebase/upgrade a customized Shelley build.
 ---
 
-Shelley is open source: https://github.com/boldsoftware/shelley. You can check it out, modify it, build it, and run it — including replacing the very binary serving this conversation.
+Shelley is open source: https://github.com/soulofmischief/shelley. You can check it out, modify it, build it, and run it — including replacing the very binary serving this conversation.
 
 For small behavior tweaks (system prompt, new-conversation defaults), prefer the `shelley-hooks` skill; it needs no rebuild. Use this skill when the change requires modifying Shelley's source.
 
@@ -12,7 +12,7 @@ For small behavior tweaks (system prompt, new-conversation defaults), prefer the
 The canonical checkout lives at `~/.config/shelley/shelley-customization`. Create it if missing:
 
 ```
-git clone https://github.com/boldsoftware/shelley ~/.config/shelley/shelley-customization
+git clone https://github.com/soulofmischief/shelley ~/.config/shelley/shelley-customization
 cd ~/.config/shelley/shelley-customization
 git checkout -b custom
 ```
@@ -86,4 +86,4 @@ git rebase origin/main custom
 
 Resolve conflicts thoughtfully — you have the user's customization commits and their messages for context; ask the user when intent is unclear. Then rebuild with `make build-custom`, run relevant tests, and offer the same run-aside/install choice as above.
 
-If the user instead wants to abandon their customizations and return to mainline releases, download the latest release binary for this platform (URLs in https://boldsoftware.github.io/shelley/release.json), install it the same side-by-side way as above, and leave the checkout in place.
+If the user instead wants to abandon their customizations and return to mainline releases, download the latest release binary for this platform (URLs in https://soulofmischief.github.io/shelley/release.json), install it the same side-by-side way as above, and leave the checkout in place.

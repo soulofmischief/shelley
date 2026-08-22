@@ -29,17 +29,18 @@ import (
 
 // VersionChecker checks for new versions of Shelley from GitHub releases.
 type VersionChecker struct {
-	mu          sync.Mutex
-	lastCheck   time.Time
-	cachedInfo  *VersionInfo
-	skipCheck   bool
-	githubOwner string
-	githubRepo  string
+	mu            sync.Mutex
+	lastCheck     time.Time
+	cachedInfo    *VersionInfo
+	skipCheck     bool
+	metadataURL   string
+	repositoryURL string
 }
 
 // VersionInfo contains version check results.
 type VersionInfo struct {
 	CurrentVersion      string       `json:"current_version"`
+	RepositoryURL       string       `json:"repository_url"`
 	CurrentTag          string       `json:"current_tag,omitempty"`
 	CurrentCommit       string       `json:"current_commit,omitempty"`
 	CurrentCommitTime   string       `json:"current_commit_time,omitempty"`
@@ -94,18 +95,19 @@ type StaticCommitInfo struct {
 }
 
 const (
-	// staticMetadataURL is the base URL for version metadata on GitHub Pages.
-	// This avoids GitHub API rate limits.
-	staticMetadataURL = "https://boldsoftware.github.io/shelley"
+	// Version metadata is published by this fork's release workflow. Browser
+	// artifacts referenced by that metadata may come from a separate source.
+	defaultMetadataURL   = "https://soulofmischief.github.io/shelley"
+	defaultRepositoryURL = "https://github.com/soulofmischief/shelley"
 )
 
 // NewVersionChecker creates a new version checker.
 func NewVersionChecker() *VersionChecker {
 	skipCheck := os.Getenv("SHELLEY_SKIP_VERSION_CHECK") == "true"
 	return &VersionChecker{
-		skipCheck:   skipCheck,
-		githubOwner: "boldsoftware",
-		githubRepo:  "shelley",
+		skipCheck:     skipCheck,
+		metadataURL:   defaultMetadataURL,
+		repositoryURL: defaultRepositoryURL,
 	}
 }
 
@@ -159,11 +161,12 @@ func customCommits(dir string) []CommitInfo {
 
 // baseVersionInfo builds a VersionInfo populated from the running build,
 // before any release-metadata fetch.
-func baseVersionInfo() *VersionInfo {
+func (vc *VersionChecker) baseVersionInfo() *VersionInfo {
 	currentInfo := version.GetInfo()
 	execPath, _ := os.Executable()
 	info := &VersionInfo{
 		CurrentVersion:      currentInfo.Version,
+		RepositoryURL:       vc.repositoryURL,
 		CurrentTag:          currentInfo.Tag,
 		CurrentCommit:       currentInfo.Commit,
 		CurrentCommitTime:   currentInfo.CommitTime,
@@ -182,7 +185,7 @@ func baseVersionInfo() *VersionInfo {
 // Check checks for a new version, using the cache if still valid.
 func (vc *VersionChecker) Check(ctx context.Context, forceRefresh bool) (*VersionInfo, error) {
 	if vc.skipCheck {
-		return baseVersionInfo(), nil
+		return vc.baseVersionInfo(), nil
 	}
 
 	vc.mu.Lock()
@@ -196,7 +199,7 @@ func (vc *VersionChecker) Check(ctx context.Context, forceRefresh bool) (*Versio
 	info, err := vc.fetchVersionInfo(ctx)
 	if err != nil {
 		// On error, return current version info with error
-		info := baseVersionInfo()
+		info := vc.baseVersionInfo()
 		info.Error = err.Error()
 		return info, nil
 	}
@@ -208,7 +211,7 @@ func (vc *VersionChecker) Check(ctx context.Context, forceRefresh bool) (*Versio
 
 // fetchVersionInfo fetches the latest release info from GitHub Pages.
 func (vc *VersionChecker) fetchVersionInfo(ctx context.Context) (*VersionInfo, error) {
-	info := baseVersionInfo()
+	info := vc.baseVersionInfo()
 
 	// Fetch latest release from static metadata
 	latestRelease, err := vc.fetchLatestRelease(ctx)
@@ -270,7 +273,7 @@ func (vc *VersionChecker) FetchChangelog(ctx context.Context, currentTag, latest
 	// pair with a stale commits.json that doesn't contain the new tag's
 	// commit yet, making the changelog come up empty. The tag is a perfect
 	// cache key: a new tag implies a redeployed commits.json containing it.
-	url := staticMetadataURL + "/commits.json?v=" + neturl.QueryEscape(latestTag)
+	url := vc.metadataURL + "/commits.json?v=" + neturl.QueryEscape(latestTag)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -431,7 +434,7 @@ func findHeadlessShellURL(release *ReleaseInfo) string {
 
 // fetchLatestRelease fetches the latest release info from GitHub Pages.
 func (vc *VersionChecker) fetchLatestRelease(ctx context.Context) (*ReleaseInfo, error) {
-	url := staticMetadataURL + "/release.json"
+	url := vc.metadataURL + "/release.json"
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {

@@ -133,6 +133,9 @@ func TestVersionCheckerSkipCheck(t *testing.T) {
 	if !vc.skipCheck {
 		t.Error("Expected skipCheck to be true when SHELLEY_SKIP_VERSION_CHECK=true")
 	}
+	if vc.metadataURL != defaultMetadataURL || vc.repositoryURL != defaultRepositoryURL {
+		t.Fatalf("unexpected release source: metadata=%q repository=%q", vc.metadataURL, vc.repositoryURL)
+	}
 
 	info, err := vc.Check(context.Background(), false)
 	if err != nil {
@@ -140,6 +143,9 @@ func TestVersionCheckerSkipCheck(t *testing.T) {
 	}
 	if info.HasUpdate {
 		t.Error("Expected HasUpdate to be false when skip check is enabled")
+	}
+	if info.RepositoryURL != defaultRepositoryURL {
+		t.Errorf("RepositoryURL = %q, want %q", info.RepositoryURL, defaultRepositoryURL)
 	}
 }
 
@@ -251,26 +257,34 @@ func TestVersionCheckerCache(t *testing.T) {
 
 	// Create version checker without skip
 	vc := &VersionChecker{
-		skipCheck:   false,
-		githubOwner: "test",
-		githubRepo:  "test",
+		metadataURL:   server.URL,
+		repositoryURL: "https://example.com/test/shelley",
 	}
 
 	// Override the fetch function by checking the cache behavior
 	ctx := context.Background()
 
 	// First call - should not use cache
-	_, err := vc.Check(ctx, false)
-	// Will fail because we're not actually calling the static site, but that's OK for this test
-	// The important thing is that it tried to fetch
+	info, err := vc.Check(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.RepositoryURL != vc.repositoryURL {
+		t.Errorf("RepositoryURL = %q, want %q", info.RepositoryURL, vc.repositoryURL)
+	}
 
 	// Second call immediately after - should use cache if first succeeded
-	_, err = vc.Check(ctx, false)
-	_ = err // Ignore error, we're just testing the cache logic
+	if _, err = vc.Check(ctx, false); err != nil {
+		t.Fatal(err)
+	}
 
 	// Force refresh should bypass cache
-	_, err = vc.Check(ctx, true)
-	_ = err
+	if _, err = vc.Check(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if callCount != 2 {
+		t.Errorf("release metadata requests = %d, want 2", callCount)
+	}
 }
 
 func TestFindDownloadURL(t *testing.T) {

@@ -20,23 +20,17 @@ bring your own.
 ## Pre-Built Binaries (macOS/Linux)
 
 ```bash
-curl -Lo shelley "https://github.com/boldsoftware/shelley/releases/latest/download/shelley_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" && chmod +x shelley
+curl -Lo shelley "https://github.com/soulofmischief/shelley/releases/latest/download/shelley_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" && chmod +x shelley
 ```
 
-The binaries are on the [releases page](https://github.com/boldsoftware/shelley/releases/latest).
-
-## Homebrew (macOS)
-
-```bash
-brew install --cask boldsoftware/tap/shelley
-```
+The binaries are on the [releases page](https://github.com/soulofmischief/shelley/releases/latest).
 
 ## Build from Source
 
 You'll need Go and Node.
 
 ```bash
-git clone https://github.com/boldsoftware/shelley.git
+git clone https://github.com/soulofmischief/shelley.git
 cd shelley
 make
 ```
@@ -86,4 +80,3 @@ run
 ```
 socat TCP-LISTEN:9001,fork TCP:localhost:9000
 ```
-
