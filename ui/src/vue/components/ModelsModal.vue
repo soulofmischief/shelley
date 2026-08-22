@@ -30,6 +30,8 @@
     </template>
 
     <div class="models-modal" :class="{ 'models-modal-list': showList }">
+      <ChatGPTAuthPanel :active="isOpen" @models-changed="handleChatGPTModelsChanged" />
+
       <div v-if="error" class="models-error">
         {{ error }}
         <button class="models-error-dismiss" @click="error = null">×</button>
@@ -180,6 +182,7 @@ import Column from "primevue/column";
 import Button from "primevue/button";
 import Modal from "./Modal.vue";
 import ModelFormModal from "./ModelFormModal.vue";
+import ChatGPTAuthPanel from "./ChatGPTAuthPanel.vue";
 import { modelsTableDt } from "./modelsTableDt";
 import { prettyModelLabels } from "../../utils/modelNames";
 import { API_TYPE_LABELS, PROVIDER_LABELS } from "./customModelConstants";
@@ -387,6 +390,19 @@ async function handleRefreshModels() {
     error.value = err instanceof Error ? err.message : "Failed to refresh models";
   } finally {
     refreshing.value = false;
+  }
+}
+
+async function handleChatGPTModelsChanged() {
+  try {
+    const refreshedModels = await api.getModels();
+    if (window.__SHELLEY_INIT__) {
+      window.__SHELLEY_INIT__.models = refreshedModels;
+    }
+    setBuiltInFromModelList(refreshedModels);
+    emit("modelsChanged");
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : "Failed to load ChatGPT models";
   }
 }
 

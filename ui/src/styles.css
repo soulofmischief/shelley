@@ -7537,6 +7537,114 @@ svg {
   padding: 0.5rem;
 }
 
+.chatgpt-auth-panel {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex: 0 0 auto;
+  margin: 0.5rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background:
+    linear-gradient(110deg, color-mix(in srgb, var(--blue-text) 8%, transparent), transparent 45%),
+    var(--bg-secondary);
+}
+.chatgpt-auth-copy {
+  min-width: 0;
+}
+.chatgpt-auth-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+.chatgpt-auth-state {
+  padding: 0.125rem 0.375rem;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.chatgpt-auth-state.connected,
+.chatgpt-auth-state.pillar {
+  background: color-mix(in srgb, var(--success-text) 12%, transparent);
+  color: var(--success-text);
+}
+.chatgpt-auth-copy p {
+  margin: 0.25rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+.chatgpt-auth-copy a {
+  display: inline-block;
+  margin-top: 0.375rem;
+  color: var(--blue-text);
+  font-size: 0.75rem;
+}
+.chatgpt-auth-copy .chatgpt-auth-error {
+  color: var(--error-text);
+}
+.chatgpt-auth-copy .chatgpt-auth-flow-note {
+  color: var(--text-primary);
+}
+.chatgpt-auth-actions {
+  display: flex;
+  flex: 0 0 auto;
+}
+.chatgpt-auth-link-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.chatgpt-auth-link-button:hover {
+  border-color: var(--text-secondary);
+}
+.chatgpt-auth-callback {
+  display: flex;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+  max-width: 42rem;
+}
+.chatgpt-auth-callback input {
+  flex: 1;
+  min-width: 16rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .chatgpt-auth-panel {
+    flex-direction: column;
+  }
+  .chatgpt-auth-callback {
+    flex-direction: column;
+  }
+  .chatgpt-auth-callback input {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
 .models-loading {
   display: flex;
   align-items: center;
@@ -13355,6 +13463,39 @@ kbd {
   border-color: var(--text-secondary);
 }
 .p-select-overlay.model-picker-panel .model-picker-effort-pill.active {
+  color: var(--blue-text);
+  border-color: var(--blue-text);
+  background: color-mix(in srgb, var(--blue-text) 10%, transparent);
+}
+
+.p-select-overlay.model-picker-panel .model-picker-request-options {
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-secondary);
+}
+.p-select-overlay.model-picker-panel .model-picker-request-option-pills {
+  display: flex;
+  gap: 0.375rem;
+}
+.p-select-overlay.model-picker-panel .model-picker-request-option {
+  min-width: 3.25rem;
+  padding: 0.25rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+.p-select-overlay.model-picker-panel .model-picker-request-option:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+.p-select-overlay.model-picker-panel .model-picker-request-option.active {
   color: var(--blue-text);
   border-color: var(--blue-text);
   background: color-mix(in srgb, var(--blue-text) 10%, transparent);

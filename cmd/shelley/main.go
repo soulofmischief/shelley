@@ -3,15 +3,18 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 
+	"shelley.exe.dev/chatgptauth"
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/client"
 	"shelley.exe.dev/db"
@@ -40,6 +43,14 @@ type shelleyConfig struct {
 	LLMGateway     string                `json:"llm_gateway"`
 	DefaultModel   string                `json:"default_model"`
 	ExeEnvironment *exeEnvironmentConfig `json:"exe_environment"`
+	ChatGPT        *chatGPTConfig        `json:"chatgpt"`
+}
+
+type chatGPTConfig struct {
+	Mode      string `json:"mode"`
+	BaseURL   string `json:"base_url"`
+	TokenFile string `json:"token_file"`
+	ReauthURL string `json:"reauth_url"`
 }
 
 type exeEnvironmentConfig struct {
@@ -209,6 +220,7 @@ func runServe(global GlobalConfig, args []string) {
 	// Create server
 	svr := server.NewServer(database, llmManager, toolSetConfig, logger, global.PredictableOnly, llmConfig.DefaultModel, *requireHeader)
 	svr.SetModelRefresher(llmConfig.RefreshBuiltModels)
+	svr.SetChatGPTAuth(llmConfig.ChatGPTAuth)
 	svr.Banner = *banner
 
 	// Load notification channels from DB.
@@ -454,20 +466,87 @@ func buildLLMConfig(global GlobalConfig, logger *slog.Logger, database *db.DB) (
 		exeenv.Configure(env)
 	}
 
-	defaultModel, sources := buildLLMModelSources(context.Background(), global, config, logger)
-
 	httpc := llmhttp.NewClient(nil)
+	chatGPT, chatGPTBaseURL, chatGPTHTTPC, err := buildChatGPTRuntime(config.ChatGPT, database, httpc)
+	if err != nil {
+		return nil, err
+	}
+	buildModels := func(ctx context.Context, initial bool) (string, []models.Built, error) {
+		defaultModel, sources := buildLLMModelSources(ctx, global, config, logger)
+		built := modelsources.Build(models.All(), sources, httpc, logger)
+		if chatGPTHTTPC == nil {
+			return defaultModel, built, nil
+		}
+		reserved := make(map[string]bool, len(built))
+		for _, model := range built {
+			reserved[model.ID] = true
+		}
+		chatGPTModels, buildErr := modelsources.BuildChatGPT(ctx, models.All(), chatGPTBaseURL, version.Version, chatGPTHTTPC, reserved, logger)
+		if buildErr != nil {
+			if errors.Is(buildErr, chatgptauth.ErrNotAuthenticated) {
+				return defaultModel, built, nil
+			}
+			if initial {
+				logger.Warn("ChatGPT models are temporarily unavailable", "error", buildErr)
+				return defaultModel, built, nil
+			}
+			return "", nil, buildErr
+		}
+		return defaultModel, insertBeforePredictable(built, chatGPTModels), nil
+	}
+	defaultModel, builtModels, err := buildModels(context.Background(), true)
+	if err != nil {
+		return nil, err
+	}
 	return &server.LLMConfig{
-		Models:       modelsources.Build(models.All(), sources, httpc, logger),
+		Models:       builtModels,
 		DefaultModel: defaultModel,
 		DB:           database,
 		HTTPC:        httpc,
 		RefreshBuiltModels: func(ctx context.Context) ([]models.Built, error) {
-			_, sources := buildLLMModelSources(ctx, global, config, logger)
-			return modelsources.Build(models.All(), sources, httpc, logger), nil
+			_, models, err := buildModels(ctx, false)
+			return models, err
 		},
-		Logger: logger,
+		ChatGPTAuth: chatGPT,
+		Logger:      logger,
 	}, nil
+}
+
+func buildChatGPTRuntime(config *chatGPTConfig, database *db.DB, httpc *http.Client) (*server.ChatGPTAuthConfig, string, *http.Client, error) {
+	if config == nil || config.Mode == "" || config.Mode == server.ChatGPTAuthModeStandalone {
+		if database == nil {
+			return nil, "", nil, nil
+		}
+		manager := chatgptauth.NewManager(database, chatgptauth.Config{})
+		return &server.ChatGPTAuthConfig{Mode: server.ChatGPTAuthModeStandalone, Manager: manager}, chatgptauth.DefaultCodexURL, manager.HTTPClient(httpc), nil
+	}
+	if config.Mode != server.ChatGPTAuthModePillar {
+		return nil, "", nil, fmt.Errorf("chatgpt.mode must be %q or %q", server.ChatGPTAuthModeStandalone, server.ChatGPTAuthModePillar)
+	}
+	if config.BaseURL == "" || config.TokenFile == "" {
+		return nil, "", nil, fmt.Errorf("chatgpt pillar mode requires base_url and token_file")
+	}
+	return &server.ChatGPTAuthConfig{
+		Mode: server.ChatGPTAuthModePillar, ReauthURL: config.ReauthURL,
+	}, strings.TrimSuffix(config.BaseURL, "/"), chatgptauth.TokenFileHTTPClient(httpc, config.TokenFile), nil
+}
+
+func insertBeforePredictable(existing, additions []models.Built) []models.Built {
+	if len(additions) == 0 {
+		return existing
+	}
+	index := len(existing)
+	for i, model := range existing {
+		if model.ID == "predictable" {
+			index = i
+			break
+		}
+	}
+	merged := make([]models.Built, 0, len(existing)+len(additions))
+	merged = append(merged, existing[:index]...)
+	merged = append(merged, additions...)
+	merged = append(merged, existing[index:]...)
+	return merged
 }
 
 func loadConfig(path string) (shelleyConfig, error) {

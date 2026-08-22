@@ -352,6 +352,65 @@ func (db *DB) SetConversationThinkingLevel(ctx context.Context, conversationID, 
 	return opts, err
 }
 
+// ConversationModelOptionsChange updates the model-facing portion of a
+// conversation. Pointer fields distinguish an omitted setting from clearing a
+// setting to its default empty value.
+type ConversationModelOptionsChange struct {
+	Model         *string
+	ThinkingLevel *string
+	ReasoningMode *string
+	ServiceTier   *string
+}
+
+// UpdateConversationModelOptions persists a model switch and its request
+// options in one transaction, preserving unrelated fields in the options JSON.
+func (db *DB) UpdateConversationModelOptions(ctx context.Context, conversationID string, change ConversationModelOptionsChange) (ConversationOptions, error) {
+	var opts ConversationOptions
+	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		q := generated.New(tx.Conn())
+		raw, err := q.GetConversationOptions(ctx, conversationID)
+		if err != nil {
+			return err
+		}
+		opts = ParseConversationOptions(raw)
+		optionsChanged := false
+		if change.ThinkingLevel != nil {
+			opts.ThinkingLevel = *change.ThinkingLevel
+			optionsChanged = true
+		}
+		if change.ReasoningMode != nil {
+			opts.ReasoningMode = *change.ReasoningMode
+			optionsChanged = true
+		}
+		if change.ServiceTier != nil {
+			opts.ServiceTier = *change.ServiceTier
+			optionsChanged = true
+		}
+		if optionsChanged {
+			optsJSON, err := json.Marshal(opts)
+			if err != nil {
+				return fmt.Errorf("failed to marshal conversation options: %w", err)
+			}
+			if err := q.UpdateConversationOptions(ctx, generated.UpdateConversationOptionsParams{
+				ConversationID:      conversationID,
+				ConversationOptions: string(optsJSON),
+			}); err != nil {
+				return err
+			}
+		}
+		if change.Model != nil {
+			if err := q.ForceUpdateConversationModel(ctx, generated.ForceUpdateConversationModelParams{
+				Model:          change.Model,
+				ConversationID: conversationID,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return opts, err
+}
+
 // CreateConversation creates a new conversation with an optional slug.
 func (db *DB) CreateConversation(ctx context.Context, slug *string, userInitiated bool, cwd, model *string, opts ConversationOptions) (*generated.Conversation, error) {
 	conversationID, err := generateConversationID()

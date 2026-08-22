@@ -77,10 +77,14 @@
         :models="models"
         :selected-model="selectedModel"
         :thinking-level="thinkingLevel"
+        :pro-mode="proMode"
+        :fast-mode="fastMode"
         :disabled="sending"
         :refreshing="refreshingModels"
         @select-model="onSelectModel"
         @thinking-change="onThinkingChange"
+        @pro-change="onProChange"
+        @fast-change="onFastChange"
         @manage-models="onManageModels"
         @refresh-models="onRefreshModels"
       />
@@ -201,6 +205,8 @@ type ModelInfo = {
   max_context_tokens?: number;
   supports_reasoning?: boolean;
   reasoning_levels?: Exclude<ThinkingLevel, "default">[];
+  supports_pro_mode?: boolean;
+  supports_fast_mode?: boolean;
   default_reasoning_level?: string;
 };
 type ToolInfo = { name: string; summary: string; default_on: boolean };
@@ -224,6 +230,9 @@ const props = defineProps<{
   sending: boolean;
   refreshingModels: boolean;
   thinkingLevel: ThinkingLevel;
+  proMode: boolean;
+  fastMode: boolean;
+  requestOptionsUpdating: boolean;
   toolOverrides: Record<string, "on" | "off">;
   toolOverrideList: ToolInfo[];
   toolOverrideCount: number;
@@ -241,9 +250,13 @@ const props = defineProps<{
    *  ChatInterface). */
   onSwitchConversationModel: (model: string) => void;
   onSwitchConversationThinkingLevel: (level: ThinkingLevel) => void;
+  onSwitchConversationProMode: (enabled: boolean) => void;
+  onSwitchConversationFastMode: (enabled: boolean) => void;
   onManageModels: () => void;
   onRefreshModels: () => void;
   onThinkingChange: (level: ThinkingLevel) => void;
+  onProChange: (enabled: boolean) => void;
+  onFastChange: (enabled: boolean) => void;
   onSetToolOverride: (name: string, value: "default" | "on" | "off") => void;
   onResetToolOverrides: () => void;
   onOpenDirectoryPicker: () => void;
@@ -269,6 +282,9 @@ const readoutProps = computed(() => ({
   models: props.models,
   selectedModel: props.selectedModel,
   thinkingLevel: props.thinkingLevel,
+  proMode: props.proMode,
+  fastMode: props.fastMode,
+  requestOptionsUpdating: props.requestOptionsUpdating,
   refreshingModels: props.refreshingModels,
   onDistillNewGeneration: props.onDistillNewGeneration,
   onStartNewGeneration: props.onStartNewGeneration,
@@ -279,6 +295,8 @@ const readoutProps = computed(() => ({
   onChangeConversationCwd: props.onOpenDirectoryPicker,
   onSwitchConversationModel: props.onSwitchConversationModel,
   onSwitchConversationThinkingLevel: props.onSwitchConversationThinkingLevel,
+  onSwitchConversationProMode: props.onSwitchConversationProMode,
+  onSwitchConversationFastMode: props.onSwitchConversationFastMode,
   onManageModels: props.onManageModels,
   onRefreshModels: props.onRefreshModels,
 }));

@@ -79,7 +79,37 @@ func getGitRoot(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(output)), nil
+	return pathWithReferenceSpelling(strings.TrimSpace(string(output)), dir), nil
+}
+
+// pathWithReferenceSpelling maps a resolved path back through the nearest
+// ancestor spelling used by reference. This keeps API paths stable on systems
+// such as macOS, where /var resolves to /private/var.
+func pathWithReferenceSpelling(path, reference string) string {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	reference, err = filepath.Abs(reference)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+
+	for candidate := filepath.Clean(reference); ; candidate = filepath.Dir(candidate) {
+		resolved, resolveErr := filepath.EvalSymlinks(candidate)
+		if resolveErr == nil {
+			rel, relErr := filepath.Rel(resolved, path)
+			if relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return filepath.Clean(filepath.Join(candidate, rel))
+			}
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			break
+		}
+	}
+
+	return filepath.Clean(path)
 }
 
 // parseDiffStat parses git diff --numstat output

@@ -465,6 +465,7 @@ import {
   type ThinkingLevel,
 } from "./thinkingLevel";
 import { SELECTED_MODEL_KEY, pickReadyModel, storedSelectedModel } from "./selectedModel";
+import { normalizeRequestOptionsForModel as normalizeRequestOptionSelection } from "./requestOptions";
 
 import MessageInput from "./MessageInput.vue";
 import ConversationTOC from "./ConversationTOC.vue";
@@ -505,8 +506,7 @@ const props = withDefaults(
       message: string,
       model: string,
       cwd?: string,
-      toolOverrides?: Record<string, "on" | "off">,
-      thinkingLevel?: Exclude<ThinkingLevel, "default">,
+      conversationOptions?: ChatRequest["conversation_options"],
     ) => Promise<void>;
     onDistillNewGeneration?: (
       sourceConversationId: string,
@@ -625,6 +625,10 @@ const models = ref<
     max_context_tokens?: number;
     supports_reasoning?: boolean;
     reasoning_levels?: Exclude<ThinkingLevel, "default">[];
+    supports_pro_mode?: boolean;
+    supports_fast_mode?: boolean;
+    default_reasoning_level?: string;
+    tier?: number;
   }>
 >(window.__SHELLEY_INIT__?.models || []);
 
@@ -658,6 +662,32 @@ const thinkingLevel = ref<ThinkingLevel>(storedThinkingLevel());
 function setThinkingLevel(level: ThinkingLevel) {
   thinkingLevel.value = level;
   localStorage.setItem(THINKING_LEVEL_KEY, level);
+}
+
+const PRO_MODE_KEY = "shelley_pro_mode";
+const FAST_MODE_KEY = "shelley_fast_mode";
+const proMode = ref(localStorage.getItem(PRO_MODE_KEY) === "true");
+const fastMode = ref(localStorage.getItem(FAST_MODE_KEY) === "true");
+const requestOptionsUpdating = ref(false);
+
+function setProMode(enabled: boolean) {
+  proMode.value = enabled;
+  localStorage.setItem(PRO_MODE_KEY, String(enabled));
+}
+
+function setFastMode(enabled: boolean) {
+  fastMode.value = enabled;
+  localStorage.setItem(FAST_MODE_KEY, String(enabled));
+}
+
+function normalizeRequestOptionsForModel(modelId: string) {
+  const model = models.value.find((candidate) => candidate.id === modelId);
+  const normalized = normalizeRequestOptionSelection(
+    { pro: proMode.value, fast: fastMode.value },
+    model,
+  );
+  if (normalized.pro !== proMode.value) setProMode(normalized.pro);
+  if (normalized.fast !== fastMode.value) setFastMode(normalized.fast);
 }
 
 function thinkingLevelForModel(modelId: string, level: ThinkingLevel): ThinkingLevel {
@@ -765,6 +795,33 @@ function switchConversationThinkingLevel(level: ThinkingLevel) {
   void sendModelCommand(level);
 }
 
+async function updateConversationRequestOptions(nextPro: boolean, nextFast: boolean) {
+  const id = props.conversationId;
+  if (!id || requestOptionsUpdating.value) return;
+  try {
+    requestOptionsUpdating.value = true;
+    await api.updateConversationRequestOptions(id, {
+      reasoning_mode: nextPro ? "pro" : "",
+      service_tier: nextFast ? "fast" : "",
+    });
+    setProMode(nextPro);
+    setFastMode(nextFast);
+  } catch (err) {
+    console.error("Failed to update model request options:", err);
+    error.value = err instanceof Error ? err.message : "Failed to update model options";
+  } finally {
+    requestOptionsUpdating.value = false;
+  }
+}
+
+function switchConversationProMode(enabled: boolean) {
+  void updateConversationRequestOptions(enabled, fastMode.value);
+}
+
+function switchConversationFastMode(enabled: boolean) {
+  void updateConversationRequestOptions(proMode.value, enabled);
+}
+
 // Model pick from the composer's picker (new/draft conversations), where the
 // model is still purely client state until the first send.
 //
@@ -777,6 +834,7 @@ function switchConversationThinkingLevel(level: ThinkingLevel) {
 function setSelectedModel(model: string) {
   const rounded = thinkingLevelForModel(model, thinkingLevel.value);
   if (rounded !== thinkingLevel.value) setThinkingLevel(rounded);
+  normalizeRequestOptionsForModel(model);
   applyModel(model);
   // Keep the server-side draft row in sync with the picker. Without this,
   // the draft keeps the model it was created with until the promoting chat
@@ -1509,19 +1567,27 @@ watch(
     if (!model) return;
     const rounded = thinkingLevelForModel(model.id, thinkingLevel.value);
     if (rounded !== thinkingLevel.value) setThinkingLevel(rounded);
+    normalizeRequestOptionsForModel(model.id);
   },
   { immediate: true },
 );
 
-const conversationThinkingLevel = computed<string | null>(() => {
+const conversationModelOptions = computed<{
+  thinking_level?: string;
+  reasoning_mode?: string;
+  service_tier?: string;
+}>(() => {
   const raw = props.currentConversation?.conversation_options;
-  if (!raw) return null;
+  if (!raw) return {};
   try {
-    const opts = JSON.parse(raw);
-    return opts?.thinking_level || null;
+    return JSON.parse(raw) || {};
   } catch {
-    return null;
+    return {};
   }
+});
+
+const conversationThinkingLevel = computed<string | null>(() => {
+  return conversationModelOptions.value.thinking_level || null;
 });
 
 const displayTitle = computed(() => {
@@ -2462,7 +2528,7 @@ const queuedGhosts = computed(() => {
 });
 
 // Build the conversation_options bundle from the current composer selection
-// (tool overrides, thinking level). "default" omits the
+// (tool overrides, thinking level, and provider request modes). "default" omits the
 // thinking override so the model's configured/provider default applies. Used
 // when promoting an autosaved draft on
 // first send — the draft is created (via POST /draft autosave) without
@@ -2472,10 +2538,12 @@ function buildConversationOptions(): ChatRequest["conversation_options"] | undef
   const hasOverrides = Object.keys(toolOverrides.value).length > 0;
   const explicitThinking = thinkingLevel.value === "default" ? undefined : thinkingLevel.value;
   const hasThinking = explicitThinking !== undefined;
-  if (!hasOverrides && !hasThinking) return undefined;
+  if (!hasOverrides && !hasThinking && !proMode.value && !fastMode.value) return undefined;
   return {
     ...(hasOverrides ? { tool_overrides: { ...toolOverrides.value } } : {}),
     ...(explicitThinking ? { thinking_level: explicitThinking } : {}),
+    ...(proMode.value ? { reasoning_mode: "pro" as const } : {}),
+    ...(fastMode.value ? { service_tier: "fast" as const } : {}),
   };
 }
 
@@ -2494,8 +2562,7 @@ async function sendFirstMessage(prompt: string) {
     prompt,
     selectedModel.value,
     selectedCwd.value || undefined,
-    Object.keys(toolOverrides.value).length > 0 ? { ...toolOverrides.value } : undefined,
-    thinkingLevel.value === "default" ? undefined : thinkingLevel.value,
+    buildConversationOptions(),
   );
 }
 
@@ -3125,6 +3192,9 @@ const statusContentProps = computed(() => {
     sending: sending.value,
     refreshingModels: refreshingModels.value,
     thinkingLevel: thinkingLevel.value,
+    proMode: proMode.value,
+    fastMode: fastMode.value,
+    requestOptionsUpdating: requestOptionsUpdating.value,
     toolOverrides: toolOverrides.value,
     toolOverrideList: toolOverrideList.value,
     toolOverrideCount: toolOverrideCount.value,
@@ -3141,9 +3211,13 @@ const statusContentProps = computed(() => {
     // send, where they are not. Separate handlers, not shared ones.
     onSwitchConversationModel: switchConversationModel,
     onSwitchConversationThinkingLevel: switchConversationThinkingLevel,
+    onSwitchConversationProMode: switchConversationProMode,
+    onSwitchConversationFastMode: switchConversationFastMode,
     onManageModels: () => props.onOpenModelsModal?.(),
     onRefreshModels: handleRefreshModels,
     onThinkingChange: setThinkingLevel,
+    onProChange: setProMode,
+    onFastChange: setFastMode,
     onSetToolOverride: setToolOverride,
     onResetToolOverrides: resetToolOverrides,
     onOpenDirectoryPicker: () => (showDirectoryPicker.value = true),
@@ -3184,6 +3258,22 @@ watch(
     if (!level || level === thinkingLevel.value) return;
     if (!THINKING_LEVELS.some((l) => l.value === level)) return;
     setThinkingLevel(level as ThinkingLevel);
+  },
+  { immediate: true },
+);
+
+watch(
+  () =>
+    [
+      props.currentConversation?.conversation_id,
+      props.currentConversation?.is_draft,
+      conversationModelOptions.value.reasoning_mode,
+      conversationModelOptions.value.service_tier,
+    ] as const,
+  ([id, isDraft, reasoningMode, serviceTier]) => {
+    if (!id || isDraft) return;
+    setProMode(reasoningMode === "pro");
+    setFastMode(serviceTier === "fast");
   },
   { immediate: true },
 );

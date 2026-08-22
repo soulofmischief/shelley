@@ -150,6 +150,9 @@ export interface TranslationKeys {
   manageModelsAction: string;
   effortLabel: string;
   effortAuto: string;
+  requestOptionsLabel: string;
+  proModeLabel: string;
+  fastModeLabel: string;
   modelSwitchBusy: string;
   modelSwitchHint: string;
   cwdChangeHint: string;

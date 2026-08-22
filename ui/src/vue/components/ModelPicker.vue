@@ -59,8 +59,8 @@
         <span :class="['model-picker-value-name', { 'status-readout-affordance': inline }]">{{
           triggerLabel || selectedLabel
         }}</span>
-        <span v-if="effortText && !inline && !triggerLabel" class="model-picker-value-effort"
-          >· {{ effortText }}</span
+        <span v-if="triggerDetail && !triggerLabel" class="model-picker-value-effort"
+          >· {{ triggerDetail }}</span
         >
       </span>
     </template>
@@ -131,6 +131,32 @@
           </div>
         </div>
       </template>
+      <template v-if="requestOptionsSupported">
+        <div class="model-picker-divider" />
+        <div class="model-picker-request-options">
+          <span class="model-picker-effort-label">{{ t("requestOptionsLabel") }}</span>
+          <div class="model-picker-request-option-pills">
+            <button
+              v-if="proSupported"
+              type="button"
+              :aria-pressed="proMode"
+              :class="`model-picker-request-option${proMode ? ' active' : ''}`"
+              @click.stop="emit('proChange', !proMode)"
+            >
+              {{ t("proModeLabel") }}
+            </button>
+            <button
+              v-if="fastSupported"
+              type="button"
+              :aria-pressed="fastMode"
+              :class="`model-picker-request-option${fastMode ? ' active' : ''}`"
+              @click.stop="emit('fastChange', !fastMode)"
+            >
+              {{ t("fastModeLabel") }}
+            </button>
+          </div>
+        </div>
+      </template>
       <template v-if="catalogActions">
         <div class="model-picker-divider" />
         <div class="model-picker-footer-row">
@@ -179,6 +205,8 @@ const props = withDefaults(
     models: Model[];
     selectedModel: string;
     thinkingLevel: ThinkingLevel;
+    proMode?: boolean;
+    fastMode?: boolean;
     disabled?: boolean;
     refreshing?: boolean;
     /** Show the "Manage models…" / refresh footer. Off where the picker
@@ -215,11 +243,15 @@ const props = withDefaults(
     inline: false,
     appendToBody: false,
     scrollHeight: "22rem",
+    proMode: false,
+    fastMode: false,
   },
 );
 const emit = defineEmits<{
   (e: "selectModel", modelId: string): void;
   (e: "thinkingChange", level: ThinkingLevel): void;
+  (e: "proChange", enabled: boolean): void;
+  (e: "fastChange", enabled: boolean): void;
   (e: "manageModels"): void;
   (e: "refreshModels"): void;
 }>();
@@ -344,11 +376,30 @@ const effortText = computed(() => {
   return effectiveEffort.value;
 });
 
+const proSupported = computed(() => selectedModelObj.value?.supports_pro_mode === true);
+const fastSupported = computed(() => selectedModelObj.value?.supports_fast_mode === true);
+const requestOptionsSupported = computed(() => proSupported.value || fastSupported.value);
+const activeRequestOptions = computed(() =>
+  [props.proMode ? t("proModeLabel") : "", props.fastMode ? t("fastModeLabel") : ""].filter(
+    Boolean,
+  ),
+);
+const triggerDetail = computed(() => {
+  const details = props.inline
+    ? activeRequestOptions.value
+    : [effortText.value, ...activeRequestOptions.value];
+  return details.filter(Boolean).join(" · ");
+});
+
 // Names the effort even in the inline variant, whose trigger doesn't show it.
 const ariaLabel = computed(() => {
   const prefix = props.ariaLabelPrefix || "Model";
-  return effortText.value
-    ? `${prefix}: ${selectedLabel.value}, reasoning effort: ${effortText.value}`
+  const details: string[] = [];
+  if (effortText.value) details.push(`reasoning effort: ${effortText.value}`);
+  if (props.proMode) details.push(t("proModeLabel"));
+  if (props.fastMode) details.push(t("fastModeLabel"));
+  return details.length
+    ? `${prefix}: ${selectedLabel.value}, ${details.join(", ")}`
     : `${prefix}: ${selectedLabel.value}`;
 });
 

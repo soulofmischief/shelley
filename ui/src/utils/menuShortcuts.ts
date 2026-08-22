@@ -65,9 +65,9 @@ export const CHAT_INTERFACE_ACTIONS: readonly MenuActionId[] = [
 ];
 
 /** Human-readable hint, e.g. "⌘⇧D" on mac or "Ctrl+Shift+D" elsewhere. */
-export function menuShortcutLabel(id: MenuActionId): string {
+export function menuShortcutLabel(id: MenuActionId, mac = isMac): string {
   const c = MENU_COMBOS[id];
-  if (isMac) {
+  if (mac) {
     const ctrl = c.mod === "ctrl" ? "\u2303" : ""; // ⌃
     const cmd = c.mod === "mod" ? "\u2318" : ""; // ⌘
     const shift = c.shift ? "\u21e7" : ""; // ⇧
@@ -80,19 +80,19 @@ export function menuShortcutLabel(id: MenuActionId): string {
 }
 
 /** Does a keydown event match this combo? Matches physical key + modifiers. */
-export function comboMatches(e: KeyboardEvent, c: Combo): boolean {
+export function comboMatches(e: KeyboardEvent, c: Combo, mac = isMac): boolean {
   if (e.code !== c.code) return false;
   if (e.altKey) return false;
   if (c.shift !== e.shiftKey) return false;
   if (c.mod === "ctrl") return e.ctrlKey && !e.metaKey;
   // "mod": Cmd-only on mac, Ctrl-only elsewhere.
-  return isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+  return mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
 }
 
 /** Which ChatInterface-owned menu action (if any) does this event trigger? */
-export function matchChatInterfaceAction(e: KeyboardEvent): MenuActionId | null {
+export function matchChatInterfaceAction(e: KeyboardEvent, mac = isMac): MenuActionId | null {
   for (const id of CHAT_INTERFACE_ACTIONS) {
-    if (comboMatches(e, MENU_COMBOS[id])) return id;
+    if (comboMatches(e, MENU_COMBOS[id], mac)) return id;
   }
   return null;
 }

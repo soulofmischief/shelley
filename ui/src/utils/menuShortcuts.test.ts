@@ -4,7 +4,6 @@ import {
   menuShortcutLabel,
   comboMatches,
   matchChatInterfaceAction,
-  isMac,
   type MenuActionId,
 } from "./menuShortcuts";
 
@@ -17,10 +16,6 @@ function assert(cond: boolean, msg: string) {
     console.error(`FAIL: ${msg}`);
   }
 }
-
-// These tests run in Node (no `navigator`), so isMac === false: labels use the
-// "Ctrl+..." form and "mod" combos match Ctrl.
-assert(isMac === false, "isMac is false under Node");
 
 // Every action has a combo, and combos are unique by (mod, shift, code).
 const ids: MenuActionId[] = [
@@ -44,15 +39,17 @@ const sigs = ids.map((id) => {
 assert(new Set(sigs).size === sigs.length, `combos are unique: ${sigs.join(", ")}`);
 
 // Non-mac labels.
-assert(menuShortcutLabel("commandPalette") === "Ctrl+K", "commandPalette label");
-assert(menuShortcutLabel("diffs") === "Ctrl+Shift+D", "diffs label");
-assert(menuShortcutLabel("gitGraph") === "Ctrl+Shift+G", "gitGraph label");
-assert(menuShortcutLabel("terminal") === "Ctrl+`", "terminal label (ctrl, no shift)");
-assert(menuShortcutLabel("archive") === "Ctrl+Shift+A", "archive label");
-assert(menuShortcutLabel("export") === "Ctrl+Shift+E", "export label");
-assert(menuShortcutLabel("editAgentsMd") === "Ctrl+Shift+,", "editAgentsMd label");
-assert(menuShortcutLabel("editFile") === "Ctrl+Shift+P", "editFile label");
-assert(menuShortcutLabel("checkVersion") === "Ctrl+Shift+U", "checkVersion label");
+assert(menuShortcutLabel("commandPalette", false) === "Ctrl+K", "commandPalette label");
+assert(menuShortcutLabel("diffs", false) === "Ctrl+Shift+D", "diffs label");
+assert(menuShortcutLabel("gitGraph", false) === "Ctrl+Shift+G", "gitGraph label");
+assert(menuShortcutLabel("terminal", false) === "Ctrl+`", "terminal label (ctrl, no shift)");
+assert(menuShortcutLabel("archive", false) === "Ctrl+Shift+A", "archive label");
+assert(menuShortcutLabel("export", false) === "Ctrl+Shift+E", "export label");
+assert(menuShortcutLabel("editAgentsMd", false) === "Ctrl+Shift+,", "editAgentsMd label");
+assert(menuShortcutLabel("editFile", false) === "Ctrl+Shift+P", "editFile label");
+assert(menuShortcutLabel("checkVersion", false) === "Ctrl+Shift+U", "checkVersion label");
+assert(menuShortcutLabel("diffs", true) === "⌘⇧D", "macOS diffs label");
+assert(menuShortcutLabel("terminal", true) === "⌃`", "macOS terminal label");
 
 // Helper to fabricate a keydown-like event.
 function ev(part: Partial<KeyboardEvent>): KeyboardEvent {
@@ -68,14 +65,18 @@ function ev(part: Partial<KeyboardEvent>): KeyboardEvent {
 
 // comboMatches: exact modifier + physical key.
 assert(
-  comboMatches(ev({ code: "KeyD", ctrlKey: true, shiftKey: true }), MENU_COMBOS.diffs),
+  comboMatches(ev({ code: "KeyD", ctrlKey: true, shiftKey: true }), MENU_COMBOS.diffs, false),
   "diffs matches Ctrl+Shift+D",
 );
-assert(!comboMatches(ev({ code: "KeyD", ctrlKey: true }), MENU_COMBOS.diffs), "diffs needs shift");
+assert(
+  !comboMatches(ev({ code: "KeyD", ctrlKey: true }), MENU_COMBOS.diffs, false),
+  "diffs needs shift",
+);
 assert(
   !comboMatches(
     ev({ code: "KeyD", ctrlKey: true, shiftKey: true, altKey: true }),
     MENU_COMBOS.diffs,
+    false,
   ),
   "alt disqualifies",
 );
@@ -83,37 +84,46 @@ assert(
   !comboMatches(
     ev({ code: "KeyD", ctrlKey: true, shiftKey: true, metaKey: true }),
     MENU_COMBOS.diffs,
+    false,
   ),
   "meta disqualifies off-mac",
 );
 assert(
-  comboMatches(ev({ code: "Backquote", ctrlKey: true }), MENU_COMBOS.terminal),
+  comboMatches(ev({ code: "Backquote", ctrlKey: true }), MENU_COMBOS.terminal, false),
   "terminal matches Ctrl+`",
 );
 assert(
-  !comboMatches(ev({ code: "Backquote", ctrlKey: true, shiftKey: true }), MENU_COMBOS.terminal),
+  !comboMatches(
+    ev({ code: "Backquote", ctrlKey: true, shiftKey: true }),
+    MENU_COMBOS.terminal,
+    false,
+  ),
   "terminal rejects shift",
+);
+assert(
+  comboMatches(ev({ code: "KeyD", metaKey: true, shiftKey: true }), MENU_COMBOS.diffs, true),
+  "macOS diffs matches Cmd+Shift+D",
 );
 
 // matchChatInterfaceAction only returns ChatInterface-owned actions.
 assert(
-  matchChatInterfaceAction(ev({ code: "KeyD", ctrlKey: true, shiftKey: true })) === "diffs",
+  matchChatInterfaceAction(ev({ code: "KeyD", ctrlKey: true, shiftKey: true }), false) === "diffs",
   "matches diffs",
 );
 assert(
-  matchChatInterfaceAction(ev({ code: "Backquote", ctrlKey: true })) === "terminal",
+  matchChatInterfaceAction(ev({ code: "Backquote", ctrlKey: true }), false) === "terminal",
   "matches terminal",
 );
 assert(
-  matchChatInterfaceAction(ev({ code: "KeyK", ctrlKey: true })) === null,
+  matchChatInterfaceAction(ev({ code: "KeyK", ctrlKey: true }), false) === null,
   "palette is NOT ChatInterface-owned",
 );
 assert(
-  matchChatInterfaceAction(ev({ code: "KeyP", ctrlKey: true, shiftKey: true })) === null,
+  matchChatInterfaceAction(ev({ code: "KeyP", ctrlKey: true, shiftKey: true }), false) === null,
   "editFile is NOT ChatInterface-owned",
 );
 assert(
-  matchChatInterfaceAction(ev({ code: "KeyZ", ctrlKey: true })) === null,
+  matchChatInterfaceAction(ev({ code: "KeyZ", ctrlKey: true }), false) === null,
   "unmapped key is null",
 );
 

@@ -64,6 +64,102 @@ func TestValidateAdvancedModelRequestOptions(t *testing.T) {
 	}
 }
 
+func TestUpdateConversationRequestOptions(t *testing.T) {
+	t.Parallel()
+	srv, database := newRequestOptionTestServer(t)
+	ctx := context.Background()
+	model := "model-a"
+	conversation, err := database.CreateConversation(ctx, nil, true, nil, &model, db.ConversationOptions{
+		ToolOverrides: map[string]string{"bash": "off"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := putRequestOptions(t, srv, conversation.ConversationID, llm.ReasoningModePro, llm.ServiceTierFast)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusNoContent, w.Body.String())
+	}
+	updated, err := database.GetConversationByID(ctx, conversation.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := db.ParseConversationOptions(updated.ConversationOptions)
+	if opts.ReasoningMode != llm.ReasoningModePro || opts.ServiceTier != llm.ServiceTierFast || opts.ToolOverrides["bash"] != "off" {
+		t.Fatalf("unexpected persisted options: %+v", opts)
+	}
+	marker := lastModelChange(listMessages(t, database, conversation.ConversationID))
+	if marker == nil || marker.UserData == nil {
+		t.Fatal("missing request-option modelchange marker")
+	}
+	var userData ModelChangeUserData
+	if err := json.Unmarshal([]byte(*marker.UserData), &userData); err != nil {
+		t.Fatal(err)
+	}
+	if userData.ReasoningModeTo != llm.ReasoningModePro || userData.ServiceTierTo != llm.ServiceTierFast {
+		t.Fatalf("unexpected marker: %+v", userData)
+	}
+	if !strings.Contains(userData.Text, "Pro mode enabled") || !strings.Contains(userData.Text, "Fast mode enabled") {
+		t.Fatalf("unexpected marker text: %q", userData.Text)
+	}
+}
+
+func TestUpdateConversationRequestOptionsRejectsUnsupportedModel(t *testing.T) {
+	t.Parallel()
+	srv, database := newRequestOptionTestServer(t)
+	model := "model-b"
+	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, &model, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := putRequestOptions(t, srv, conversation.ConversationID, llm.ReasoningModePro, "")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "does not support Pro mode") {
+		t.Fatalf("status = %d, body = %q", w.Code, w.Body.String())
+	}
+}
+
+func TestModelSwitchClearsUnsupportedRequestOptions(t *testing.T) {
+	t.Parallel()
+	srv, database := newRequestOptionTestServer(t)
+	ctx := context.Background()
+	model := "model-a"
+	conversation, err := database.CreateConversation(ctx, nil, true, nil, &model, db.ConversationOptions{
+		ReasoningMode: llm.ReasoningModePro,
+		ServiceTier:   llm.ServiceTierFast,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := postChat(t, srv, conversation.ConversationID, "/model model-b")
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusAccepted, w.Body.String())
+	}
+	updated, err := database.GetConversationByID(ctx, conversation.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := db.ParseConversationOptions(updated.ConversationOptions)
+	if opts.ReasoningMode != "" || opts.ServiceTier != "" {
+		t.Fatalf("request options survived unsupported model switch: %+v", opts)
+	}
+	if updated.Model == nil || *updated.Model != "model-b" {
+		t.Fatalf("model = %v, want model-b", updated.Model)
+	}
+	marker := lastModelChange(listMessages(t, database, conversation.ConversationID))
+	var userData ModelChangeUserData
+	if marker == nil || marker.UserData == nil {
+		t.Fatal("missing modelchange marker")
+	}
+	if err := json.Unmarshal([]byte(*marker.UserData), &userData); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(userData.Text, "Pro mode disabled") || !strings.Contains(userData.Text, "Fast mode disabled") {
+		t.Fatalf("unexpected marker text: %q", userData.Text)
+	}
+}
+
 func TestModelCommandStatusListsPerModelLevels(t *testing.T) {
 	status := modelCommandStatus("model-a", "", []ModelInfo{
 		{ID: "model-a", Ready: true, SupportsReasoning: true, ReasoningLevels: []string{"off", "high", "max"}},
@@ -90,6 +186,46 @@ func TestModelCommandStatusListsPerModelLevels(t *testing.T) {
 type twoModelLLMManager struct {
 	service llm.Service
 }
+
+type requestOptionService struct {
+	llm.Service
+	pro  bool
+	fast bool
+}
+
+func (s *requestOptionService) SupportsReasoningMode(mode string) bool {
+	return mode == llm.ReasoningModePro && s.pro
+}
+
+func (s *requestOptionService) SupportsServiceTier(tier string) bool {
+	return tier == llm.ServiceTierFast && s.fast
+}
+
+type requestOptionLLMManager struct {
+	service llm.Service
+}
+
+func (m *requestOptionLLMManager) GetService(modelID string) (llm.Service, error) {
+	switch modelID {
+	case "model-a":
+		return &requestOptionService{Service: m.service, pro: true, fast: true}, nil
+	case "model-b":
+		return &requestOptionService{Service: m.service}, nil
+	default:
+		return nil, os.ErrNotExist
+	}
+}
+
+func (m *requestOptionLLMManager) GetAvailableModels() []string {
+	return []string{"model-a", "model-b"}
+}
+func (m *requestOptionLLMManager) HasModel(modelID string) bool {
+	return modelID == "model-a" || modelID == "model-b"
+}
+func (m *requestOptionLLMManager) GetModelInfo(modelID string) *models.ModelInfo {
+	return &models.ModelInfo{DisplayName: modelID}
+}
+func (m *requestOptionLLMManager) RefreshCustomModels() error { return nil }
 
 func (m *twoModelLLMManager) GetService(modelID string) (llm.Service, error) {
 	if modelID == "model-a" || modelID == "model-b" {
@@ -159,6 +295,16 @@ func newTwoModelTestServer(t *testing.T) (*Server, *db.DB) {
 	return svr, database
 }
 
+func newRequestOptionTestServer(t *testing.T) (*Server, *db.DB) {
+	t.Helper()
+	database, cleanup := setupTestDB(t)
+	t.Cleanup(cleanup)
+	manager := &requestOptionLLMManager{service: loop.NewPredictableService()}
+	svr := NewServer(database, manager, claudetool.ToolSetConfig{EnableBrowser: false}, slog.Default(), false, "model-a", "")
+	svr.hooksDir = t.TempDir()
+	return svr, database
+}
+
 func postChat(t *testing.T, srv *Server, conversationID, message string) *httptest.ResponseRecorder {
 	t.Helper()
 	body, _ := json.Marshal(ChatRequest{Message: message})
@@ -178,6 +324,16 @@ func postChatModel(t *testing.T, srv *Server, conversationID, message, model str
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.handleChatConversation(w, req, conversationID)
+	return w
+}
+
+func putRequestOptions(t *testing.T, srv *Server, conversationID, reasoningMode, serviceTier string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"reasoning_mode": reasoningMode, "service_tier": serviceTier})
+	req := httptest.NewRequest(http.MethodPut, "/api/conversation/"+conversationID+"/request-options", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handleUpdateConversationRequestOptions(w, req, conversationID)
 	return w
 }
 

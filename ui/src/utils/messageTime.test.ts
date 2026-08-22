@@ -34,8 +34,8 @@ Object.defineProperty(Intl, "DateTimeFormat", {
 try {
   const { formatAbsolute, formatDay, formatTime } = await import("./messageTime");
   const date = new Date("2026-08-04T12:34:56Z");
-  const sameYear = new Date("2026-01-01T00:00:00Z");
-  const otherYear = new Date("2025-01-01T00:00:00Z");
+  const sameYear = new Date(2026, 5, 1, 12);
+  const otherYear = new Date(2025, 5, 1, 12);
   const expectedTime = new originalDateTimeFormat([], {
     hour: "numeric",
     minute: "2-digit",

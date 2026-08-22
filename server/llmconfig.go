@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"shelley.exe.dev/chatgptauth"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/models"
 )
@@ -38,5 +39,16 @@ type LLMConfig struct {
 	// The server calls this for explicit user-triggered refreshes.
 	RefreshBuiltModels func(context.Context) ([]models.Built, error)
 
+	// ChatGPTAuth describes how ChatGPT subscription credentials are supplied.
+	// Nil disables the integration. Standalone mode owns OAuth locally; Pillar
+	// mode reports platform ownership and directs users to its reauthentication UI.
+	ChatGPTAuth *ChatGPTAuthConfig
+
 	Logger *slog.Logger
+}
+
+type ChatGPTAuthConfig struct {
+	Mode      string
+	Manager   *chatgptauth.Manager
+	ReauthURL string
 }

@@ -71,6 +71,8 @@ export interface Model {
   supports_images?: boolean;
   supports_reasoning?: boolean;
   reasoning_levels?: ("off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max")[];
+  supports_pro_mode?: boolean;
+  supports_fast_mode?: boolean;
   // Tier is 1 for prominent models and 2 for models overshadowed by a better
   // available sibling. The picker keeps tier-2 models behind a "more models"
   // toggle. Absent/0 is treated as tier 1 by the UI.
@@ -88,6 +90,8 @@ export interface ChatRequest {
     tool_overrides?: Record<string, "on" | "off">;
     disable_all_tools?: boolean;
     thinking_level?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+    reasoning_mode?: "pro";
+    service_tier?: "fast";
     disable_notifications?: boolean;
   };
   queue?: boolean;
@@ -272,6 +276,7 @@ export interface ConversationListPatchEvent {
 // Version check types
 export interface VersionInfo {
   current_version: string;
+  repository_url: string;
   current_tag?: string;
   current_commit?: string;
   current_commit_time?: string;

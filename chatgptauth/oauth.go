@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -100,6 +101,8 @@ func NewManager(store Store, cfg Config) *Manager {
 		pending:     make(map[string]pendingFlow),
 	}
 }
+
+func (m *Manager) RedirectURI() string { return m.redirectURI }
 
 func (m *Manager) StartFlow() (Flow, error) {
 	verifier, err := randomURLToken(32)
@@ -260,6 +263,45 @@ func (m *Manager) HTTPClient(base *http.Client) *http.Client {
 	return &clone
 }
 
+// TokenFileHTTPClient authenticates requests with a short-lived platform token
+// read for every request, allowing Pillar to rotate the file atomically without
+// restarting Shelley.
+func TokenFileHTTPClient(base *http.Client, tokenFile string) *http.Client {
+	if base == nil {
+		base = http.DefaultClient
+	}
+	clone := *base
+	transport := base.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	clone.Transport = tokenFileTransport{base: transport, tokenFile: tokenFile}
+	return &clone
+}
+
+type tokenFileTransport struct {
+	base      http.RoundTripper
+	tokenFile string
+}
+
+func (t tokenFileTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	token, err := os.ReadFile(t.tokenFile)
+	if err != nil {
+		return nil, fmt.Errorf("read Pillar ChatGPT token: %w", err)
+	}
+	value := strings.TrimSpace(string(token))
+	if value == "" {
+		return nil, fmt.Errorf("Pillar ChatGPT token file is empty")
+	}
+	clone, err := cloneRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	clone.Header.Set("Authorization", "Bearer "+value)
+	clone.Header.Set("originator", "shelley")
+	return t.base.RoundTrip(clone)
+}
+
 func (m *Manager) requestTokens(ctx context.Context, values url.Values, jsonBody bool) (tokenResponse, error) {
 	var body io.Reader
 	req, err := func() (*http.Request, error) {
@@ -348,11 +390,17 @@ func (t *oauthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	first := cloneRequest(req)
+	first, err := cloneRequest(req)
+	if err != nil {
+		return nil, err
+	}
 	setAuthHeaders(first, credentials)
 	response, err := t.base.RoundTrip(first)
 	if err != nil || response.StatusCode != http.StatusUnauthorized {
 		return response, err
+	}
+	if req.Body != nil && req.GetBody == nil {
+		return response, nil
 	}
 	response.Body.Close()
 
@@ -360,21 +408,25 @@ func (t *oauthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	retry := cloneRequest(req)
+	retry, err := cloneRequest(req)
+	if err != nil {
+		return nil, err
+	}
 	setAuthHeaders(retry, credentials)
 	return t.base.RoundTrip(retry)
 }
 
-func cloneRequest(req *http.Request) *http.Request {
+func cloneRequest(req *http.Request) (*http.Request, error) {
 	clone := req.Clone(req.Context())
 	clone.Header = req.Header.Clone()
 	if req.GetBody != nil {
 		body, err := req.GetBody()
-		if err == nil {
-			clone.Body = body
+		if err != nil {
+			return nil, fmt.Errorf("clone request body: %w", err)
 		}
+		clone.Body = body
 	}
-	return clone
+	return clone, nil
 }
 
 func setAuthHeaders(req *http.Request, credentials Credentials) {

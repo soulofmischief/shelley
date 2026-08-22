@@ -73,10 +73,14 @@
           :models="models"
           :selected-model="selectedModel"
           :thinking-level="thinkingLevel"
-          :disabled="agentWorking"
+          :pro-mode="proMode"
+          :fast-mode="fastMode"
+          :disabled="agentWorking || requestOptionsUpdating"
           :refreshing="refreshingModels"
           @select-model="onSwitchConversationModel"
           @thinking-change="onSwitchConversationThinkingLevel"
+          @pro-change="onSwitchConversationProMode"
+          @fast-change="onSwitchConversationFastMode"
           @manage-models="onManageModels"
           @refresh-models="onRefreshModels"
         />
@@ -106,6 +110,9 @@ const props = defineProps<{
   models: Model[];
   selectedModel: string;
   thinkingLevel: ThinkingLevel;
+  proMode: boolean;
+  fastMode: boolean;
+  requestOptionsUpdating?: boolean;
   refreshingModels?: boolean;
   agentWorking?: boolean;
   onDistillNewGeneration?: () => Promise<void> | void;
@@ -114,6 +121,8 @@ const props = defineProps<{
   onChangeConversationCwd?: () => void;
   onSwitchConversationModel: (model: string) => void;
   onSwitchConversationThinkingLevel: (level: ThinkingLevel) => void;
+  onSwitchConversationProMode: (enabled: boolean) => void;
+  onSwitchConversationFastMode: (enabled: boolean) => void;
   onManageModels: () => void;
   onRefreshModels: () => void;
 }>();

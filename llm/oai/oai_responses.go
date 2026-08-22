@@ -41,6 +41,12 @@ type ResponsesService struct {
 	// ReasoningLevels overrides models.dev capability lookup when a provider's
 	// authenticated model catalog supplies an exact list.
 	ReasoningLevels []llm.ThinkingLevel
+	// ServiceTiers overrides provider-wide defaults when an authenticated model
+	// catalog supplies an exact list. A non-nil empty slice means no tiers.
+	ServiceTiers []string
+	// ContextWindow overrides the built-in model-name lookup when a provider
+	// advertises an exact token limit.
+	ContextWindow int
 
 	// ReasoningEffort, if non-empty, is used as the reasoning.effort value sent to
 	// the OpenAI Responses API verbatim, overriding ThinkingLevel. This allows
@@ -517,6 +523,9 @@ func (s *ResponsesService) SupportsServerSideWebSearch() bool { return true }
 // SupportsReasoning reports the models.dev capability when known. Unknown
 // models retain the historical default of supporting reasoning controls.
 func (s *ResponsesService) SupportsReasoning() bool {
+	if s.ReasoningLevels != nil {
+		return len(s.ReasoningLevels) > 0
+	}
 	caps, found := modelReasoningCapabilities(s.ModelURL, cmp.Or(s.Model, DefaultModel))
 	return !found || caps.Supported
 }
@@ -525,7 +534,7 @@ func (s *ResponsesService) SupportsReasoning() bool {
 // Nil means the model has no exact effort metadata and callers use the
 // historical provider fallback.
 func (s *ResponsesService) SupportedReasoningLevels() []llm.ThinkingLevel {
-	if len(s.ReasoningLevels) > 0 {
+	if s.ReasoningLevels != nil {
 		return slices.Clone(s.ReasoningLevels)
 	}
 	caps, found := modelReasoningCapabilities(s.ModelURL, cmp.Or(s.Model, DefaultModel))
@@ -541,6 +550,9 @@ func (s *ResponsesService) SupportsReasoningMode(mode string) bool {
 }
 
 func (s *ResponsesService) SupportsServiceTier(tier string) bool {
+	if s.ServiceTiers != nil {
+		return slices.Contains(s.ServiceTiers, tier)
+	}
 	return tier == llm.ServiceTierFast && s.isOpenAIResponses()
 }
 
@@ -551,6 +563,9 @@ func (s *ResponsesService) SupportsImages() bool { return s.Model.SupportsImages
 
 // TokenContextWindow returns the maximum token context window size for this service
 func (s *ResponsesService) TokenContextWindow() int {
+	if s.ContextWindow > 0 {
+		return s.ContextWindow
+	}
 	model := cmp.Or(s.Model, DefaultModel)
 
 	// Use the same context window logic as the regular service

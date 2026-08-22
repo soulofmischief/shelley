@@ -79,6 +79,28 @@ func TestGetGitRoot(t *testing.T) {
 	}
 }
 
+func TestPathWithReferenceSpelling(t *testing.T) {
+	t.Parallel()
+
+	realRoot := t.TempDir()
+	aliasParent := t.TempDir()
+	aliasRoot := filepath.Join(aliasParent, "alias")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(realRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reference := filepath.Join(aliasRoot, "worktree", "subdir")
+	path := filepath.Join(resolvedRoot, "main", ".git")
+	want := filepath.Join(aliasRoot, "main", ".git")
+	if got := pathWithReferenceSpelling(path, reference); got != want {
+		t.Fatalf("pathWithReferenceSpelling() = %q, want %q", got, want)
+	}
+}
+
 // TestParseDiffStat tests the parseDiffStat function
 func TestParseDiffStat(t *testing.T) {
 	t.Parallel()

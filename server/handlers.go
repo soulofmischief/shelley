@@ -986,7 +986,67 @@ func (s *Server) conversationMux() *http.ServeMux {
 	mux.HandleFunc("POST /{id}/cwd", func(w http.ResponseWriter, r *http.Request) {
 		s.handleSetConversationCwd(w, r, r.PathValue("id"))
 	})
+	mux.HandleFunc("PUT /{id}/request-options", func(w http.ResponseWriter, r *http.Request) {
+		s.handleUpdateConversationRequestOptions(w, r, r.PathValue("id"))
+	})
 	return mux
+}
+
+func (s *Server) handleUpdateConversationRequestOptions(w http.ResponseWriter, r *http.Request, conversationID string) {
+	var request struct {
+		ReasoningMode string `json:"reasoning_mode"`
+		ServiceTier   string `json:"service_tier"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid request options: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	opts := db.ConversationOptions{ReasoningMode: request.ReasoningMode, ServiceTier: request.ServiceTier}
+	if msg := validateConversationOptions(opts); msg != "" {
+		http.Error(w, msg, http.StatusBadRequest)
+		return
+	}
+	manager, err := s.getOrCreateConversationManager(r.Context(), conversationID, r.Header.Get("X-ExeDev-Email"))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "Conversation not found", http.StatusNotFound)
+			return
+		}
+		s.logger.Error("Failed to load conversation for request option update", "conversationID", conversationID, "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if err := manager.Hydrate(r.Context()); err != nil {
+		s.logger.Error("Failed to hydrate conversation for request option update", "conversationID", conversationID, "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	modelID := manager.GetModel()
+	if msg := validateModelRequestOptions(findModelInfo(modelID, s.getModelList()), opts); msg != "" {
+		http.Error(w, msg, http.StatusBadRequest)
+		return
+	}
+	oldMode, oldTier := manager.GetModelRequestOptions()
+	if oldMode == request.ReasoningMode && oldTier == request.ServiceTier {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := manager.ApplyModelSettings(r.Context(), ModelSettingsChange{
+		OldModel:          modelID,
+		RequestOptionsSet: true,
+		OldReasoningMode:  oldMode,
+		NewReasoningMode:  request.ReasoningMode,
+		OldServiceTier:    oldTier,
+		NewServiceTier:    request.ServiceTier,
+	}); err != nil {
+		s.logger.Error("Failed to apply conversation request options", "conversationID", conversationID, "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleGetConversation handles GET /conversation/<id>
@@ -1795,11 +1855,21 @@ func (s *Server) handleContinueConversation(w http.ResponseWriter, r *http.Reque
 	// Build the model-switch delta (empty when already on the target model, in
 	// which case ContinueAfterRefusal just re-fires without a modelchange marker).
 	currentReasoning := manager.GetThinkingLevel()
-	ch := ModelSettingsChange{OldModel: currentModel, OldReasoning: currentReasoning}
+	currentMode, currentTier := manager.GetModelRequestOptions()
+	ch := ModelSettingsChange{
+		OldModel: currentModel, OldReasoning: currentReasoning,
+		OldReasoningMode: currentMode, OldServiceTier: currentTier,
+	}
 	if newModel != currentModel {
 		ch.NewModel = newModel
 		ch.OldModelDisplay = modelDisplayName(currentModel, modelList)
 		ch.NewModelDisplay = modelDisplayName(newModel, modelList)
+		newMode, newTier, changed := normalizeModelRequestOptions(findModelInfo(newModel, modelList), currentMode, currentTier)
+		if changed {
+			ch.RequestOptionsSet = true
+			ch.NewReasoningMode = newMode
+			ch.NewServiceTier = newTier
+		}
 	}
 
 	if err := manager.ContinueAfterRefusal(ctx, ch, llmService, newModel); err != nil {
@@ -2551,7 +2621,11 @@ func (s *Server) handleModelCommand(ctx context.Context, w http.ResponseWriter, 
 	}
 
 	// Reduce to the actual deltas: ignore no-op changes.
-	ch := ModelSettingsChange{OldModel: currentModel, OldReasoning: currentReasoning}
+	currentMode, currentTier := manager.GetModelRequestOptions()
+	ch := ModelSettingsChange{
+		OldModel: currentModel, OldReasoning: currentReasoning,
+		OldReasoningMode: currentMode, OldServiceTier: currentTier,
+	}
 	if modelSet && newModel != currentModel {
 		ch.NewModel = newModel
 		ch.OldModelDisplay = modelDisplayName(currentModel, modelList)
@@ -2561,8 +2635,16 @@ func (s *Server) handleModelCommand(ctx context.Context, w http.ResponseWriter, 
 		ch.ReasoningSet = true
 		ch.NewReasoning = newReasoning
 	}
+	if modelSet {
+		newMode, newTier, changed := normalizeModelRequestOptions(targetInfo, currentMode, currentTier)
+		if changed {
+			ch.RequestOptionsSet = true
+			ch.NewReasoningMode = newMode
+			ch.NewServiceTier = newTier
+		}
+	}
 
-	if ch.NewModel == "" && !ch.ReasoningSet {
+	if ch.NewModel == "" && !ch.ReasoningSet && !ch.RequestOptionsSet {
 		return reply(fmt.Sprintf("Already using model %s with reasoning %s.", currentModel, reasoningDisplayName(currentReasoning)))
 	}
 
@@ -2841,6 +2923,21 @@ type builtModelRefresher interface {
 	RefreshBuiltModels([]models.Built) error
 }
 
+func (s *Server) refreshModelCatalog(ctx context.Context) error {
+	if s.refreshBuiltModels == nil {
+		return fmt.Errorf("model refresh is not configured")
+	}
+	refresher, ok := s.llmManager.(builtModelRefresher)
+	if !ok {
+		return fmt.Errorf("model manager does not support refresh")
+	}
+	builtModels, err := s.refreshBuiltModels(ctx)
+	if err != nil {
+		return err
+	}
+	return refresher.RefreshBuiltModels(builtModels)
+}
+
 // handleModelRefresh refreshes the non-custom model catalog and returns the
 // same shape as GET /api/models.
 func (s *Server) handleModelRefresh(w http.ResponseWriter, r *http.Request) {
@@ -2852,17 +2949,7 @@ func (s *Server) handleModelRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "model refresh is not configured", http.StatusNotImplemented)
 		return
 	}
-	refresher, ok := s.llmManager.(builtModelRefresher)
-	if !ok {
-		http.Error(w, "model manager does not support refresh", http.StatusInternalServerError)
-		return
-	}
-	builtModels, err := s.refreshBuiltModels(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := refresher.RefreshBuiltModels(builtModels); err != nil {
+	if err := s.refreshModelCatalog(r.Context()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -4071,6 +4158,18 @@ func validateModelRequestOptions(model *ModelInfo, opts db.ConversationOptions) 
 		return fmt.Sprintf("Model %s does not support Fast mode.", modelName(model))
 	}
 	return ""
+}
+
+func normalizeModelRequestOptions(model *ModelInfo, reasoningMode, serviceTier string) (string, string, bool) {
+	normalizedMode := reasoningMode
+	normalizedTier := serviceTier
+	if reasoningMode == llm.ReasoningModePro && (model == nil || !model.SupportsProMode) {
+		normalizedMode = ""
+	}
+	if serviceTier == llm.ServiceTierFast && (model == nil || !model.SupportsFastMode) {
+		normalizedTier = ""
+	}
+	return normalizedMode, normalizedTier, normalizedMode != reasoningMode || normalizedTier != serviceTier
 }
 
 func modelName(model *ModelInfo) string {

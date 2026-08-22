@@ -1234,3 +1234,40 @@ func TestDecodeParticipants(t *testing.T) {
 		t.Error("decodeParticipants(\"not json\") = nil error, want error")
 	}
 }
+
+func TestUpdateConversationModelOptions(t *testing.T) {
+	database := setupTestDB(t)
+	defer database.Close()
+	ctx := context.Background()
+
+	oldModel := "model-a"
+	conversation, err := database.CreateConversation(ctx, nil, true, nil, &oldModel, ConversationOptions{
+		ToolOverrides: map[string]string{"bash": "off"},
+		ThinkingLevel: "high",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newModel := "model-b"
+	pro := "pro"
+	fast := "fast"
+	opts, err := database.UpdateConversationModelOptions(ctx, conversation.ConversationID, ConversationModelOptionsChange{
+		Model:         &newModel,
+		ReasoningMode: &pro,
+		ServiceTier:   &fast,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.ThinkingLevel != "high" || opts.ToolOverrides["bash"] != "off" || opts.ReasoningMode != "pro" || opts.ServiceTier != "fast" {
+		t.Fatalf("unexpected options: %+v", opts)
+	}
+
+	updated, err := database.GetConversationByID(ctx, conversation.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Model == nil || *updated.Model != newModel {
+		t.Fatalf("model = %v, want %q", updated.Model, newModel)
+	}
+}

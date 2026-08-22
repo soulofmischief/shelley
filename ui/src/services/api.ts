@@ -36,6 +36,31 @@ export interface AvailableModel {
   max_context_tokens?: number;
   is_default?: boolean;
   supports_images?: boolean;
+  supports_reasoning?: boolean;
+  reasoning_levels?: ("off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max")[];
+  supports_pro_mode?: boolean;
+  supports_fast_mode?: boolean;
+  default_reasoning_level?: string;
+  tier?: number;
+}
+
+export interface ChatGPTAuthStatus {
+  mode: "standalone" | "pillar";
+  configured: boolean;
+  authenticated: boolean;
+  account_id?: string;
+  expires_at?: string;
+  reauth_url?: string;
+  error?: string;
+}
+
+export interface ChatGPTAuthFlow {
+  authorization_url: string;
+  state: string;
+  redirect_uri: string;
+  expires_at: string;
+  callback_listener: boolean;
+  listener_error?: string;
 }
 
 class ApiService {
@@ -81,6 +106,44 @@ class ApiService {
       throw await responseError(response, "Failed to refresh models");
     }
     return response.json();
+  }
+
+  async getChatGPTAuthStatus(): Promise<ChatGPTAuthStatus> {
+    const response = await fetch(`${this.baseUrl}/chatgpt-auth`);
+    if (!response.ok) {
+      throw await responseError(response, "Failed to load ChatGPT account status");
+    }
+    return response.json();
+  }
+
+  async startChatGPTAuth(): Promise<ChatGPTAuthFlow> {
+    const response = await fetch(`${this.baseUrl}/chatgpt-auth/start`, {
+      method: "POST",
+      headers: this.postHeaders,
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to start ChatGPT sign-in");
+    }
+    return response.json();
+  }
+
+  async completeChatGPTAuth(callbackUrl: string): Promise<ChatGPTAuthStatus> {
+    const response = await fetch(`${this.baseUrl}/chatgpt-auth/complete`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ callback_url: callbackUrl }),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to complete ChatGPT sign-in");
+    }
+    return response.json();
+  }
+
+  async logoutChatGPT(): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/chatgpt-auth`, { method: "DELETE" });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to sign out of ChatGPT");
+    }
   }
 
   async getTools(): Promise<{
@@ -157,6 +220,20 @@ class ApiService {
       throw await responseError(response, "Failed to update draft");
     }
     return response.json();
+  }
+
+  async updateConversationRequestOptions(
+    conversationId: string,
+    options: { reasoning_mode: "pro" | ""; service_tier: "fast" | "" },
+  ): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/request-options`, {
+      method: "PUT",
+      headers: this.postHeaders,
+      body: JSON.stringify(options),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to update model options");
+    }
   }
 
   async sendMessageWithNewConversation(request: ChatRequest): Promise<{ conversation_id: string }> {

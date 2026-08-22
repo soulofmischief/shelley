@@ -231,6 +231,7 @@ import {
   type Conversation,
   type ConversationWithState,
   type ConversationListPatchEvent,
+  type ChatRequest,
 } from "../types";
 import { api } from "../services/api";
 import { messageStore } from "../services/messageStore";
@@ -710,24 +711,14 @@ async function handleFirstMessage(
   message: string,
   model: string,
   cwd?: string,
-  toolOverrides?: Record<string, "on" | "off">,
-  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max",
+  conversationOptions?: ChatRequest["conversation_options"],
 ) {
   try {
-    const hasOverrides = toolOverrides && Object.keys(toolOverrides).length > 0;
-    const hasThinking = !!thinkingLevel;
-    const convOpts =
-      hasOverrides || hasThinking
-        ? {
-            ...(hasOverrides ? { tool_overrides: toolOverrides } : {}),
-            ...(hasThinking ? { thinking_level: thinkingLevel } : {}),
-          }
-        : undefined;
     const response = await api.sendMessageWithNewConversation({
       message,
       model,
       cwd,
-      conversation_options: convOpts,
+      conversation_options: conversationOptions,
     });
     const newConversationId = response.conversation_id;
     messageStore.setAgentWorking(newConversationId, true);

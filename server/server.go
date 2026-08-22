@@ -356,6 +356,7 @@ type Server struct {
 	defaultModel             string
 	requireHeader            string
 	refreshBuiltModels       func(context.Context) ([]models.Built, error)
+	chatGPTAuth              *chatGPTAuthController
 	conversationGroup        singleflight.Group[string, *ConversationManager]
 	versionChecker           *VersionChecker
 	notifDispatcher          *notifications.Dispatcher
@@ -464,6 +465,14 @@ func (s *Server) SetModelRefresher(refresh func(context.Context) ([]models.Built
 	s.refreshBuiltModels = refresh
 }
 
+func (s *Server) SetChatGPTAuth(config *ChatGPTAuthConfig) {
+	if config == nil {
+		s.chatGPTAuth = nil
+		return
+	}
+	s.chatGPTAuth = newChatGPTAuthController(*config, s.refreshModelCatalog, s.logger)
+}
+
 // RegisterNotificationChannel adds a backend notification channel to the dispatcher.
 func (s *Server) RegisterNotificationChannel(ch notifications.Channel) {
 	s.notifDispatcher.Register(ch)
@@ -526,6 +535,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/models/refresh", compressionHandler(http.HandlerFunc(s.handleModelRefresh)))
 	mux.Handle("/api/models", compressionHandler(http.HandlerFunc(s.handleModels)))
 	mux.Handle("/api/tools", http.HandlerFunc(s.handleTools))
+	if s.chatGPTAuth != nil {
+		s.chatGPTAuth.registerRoutes(mux)
+	}
 
 	// Version endpoints
 	mux.Handle("GET /version", http.HandlerFunc(s.handleVersion))
@@ -848,8 +860,9 @@ func getGitWorktreeRoot(repoPath string) string {
 		return ""
 	}
 
-	// The main repo root is the parent of the common .git dir
-	return filepath.Dir(commonDir)
+	// The main repo root is the parent of the common .git dir. Preserve the
+	// caller's path spelling so worktree APIs remain stable across symlinks.
+	return pathWithReferenceSpelling(filepath.Dir(commonDir), repoPath)
 }
 
 // handleCreateDirectory creates a new directory

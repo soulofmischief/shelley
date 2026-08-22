@@ -183,11 +183,10 @@ type ConversationManager struct {
 	// retryMu serializes RetryLastLLMRequest so concurrent retry POSTs don't
 	// produce duplicate LLM calls or double-broadcast user_data updates.
 	retryMu sync.Mutex
-	// thinkingMu serializes SetThinkingLevel so concurrent calls can't leave
-	// the in-memory conversationOptions / loop level inconsistent with the
-	// persisted value (an earlier call's in-memory assignment racing a later
-	// call's DB write).
-	thinkingMu sync.Mutex
+	// modelSettingsMu serializes all model-facing option changes so concurrent
+	// requests cannot leave memory, the database, and the active loop on
+	// different settings.
+	modelSettingsMu sync.Mutex
 	// lastRetriedErrorMessageID dedupes retry double-clicks WITHOUT mutating the
 	// error message row (which would reintroduce the immutability violation).
 	// Guarded by cm.mu. Once a retry kicks off for a given bottom error message,
@@ -354,9 +353,8 @@ func (cm *ConversationManager) RegisterEndOfTurnHook(ctx context.Context, hook d
 // (SubagentTool.ParentReasoning), which only reaches here with a concrete
 // level, never "".
 //
-// thinkingMu serializes the whole DB-write-then-apply sequence so concurrent
-// calls can't persist one level while an earlier call's in-memory assignment
-// leaves conversationOptions / the loop pinned to a stale level.
+// modelSettingsMu serializes the whole DB-write-then-apply sequence with model
+// switches and provider request-option updates.
 func (cm *ConversationManager) SetThinkingLevel(ctx context.Context, reasoning string) error {
 	if reasoning == "" {
 		return nil
@@ -365,8 +363,8 @@ func (cm *ConversationManager) SetThinkingLevel(ctx context.Context, reasoning s
 		return err
 	}
 
-	cm.thinkingMu.Lock()
-	defer cm.thinkingMu.Unlock()
+	cm.modelSettingsMu.Lock()
+	defer cm.modelSettingsMu.Unlock()
 
 	cm.mu.Lock()
 	if cm.conversationOptions.ThinkingLevel == reasoning {
@@ -2327,10 +2325,14 @@ func (cm *ConversationManager) recordGitStateChange(ctx context.Context, state *
 // ("off", "low", ..., or "default" for the service default); they are empty
 // when reasoning didn't change.
 type ModelChangeUserData struct {
-	From          string `json:"from,omitempty"`
-	To            string `json:"to,omitempty"`
-	ReasoningFrom string `json:"reasoning_from,omitempty"`
-	ReasoningTo   string `json:"reasoning_to,omitempty"`
+	From              string `json:"from,omitempty"`
+	To                string `json:"to,omitempty"`
+	ReasoningFrom     string `json:"reasoning_from,omitempty"`
+	ReasoningTo       string `json:"reasoning_to,omitempty"`
+	ReasoningModeFrom string `json:"reasoning_mode_from,omitempty"`
+	ReasoningModeTo   string `json:"reasoning_mode_to,omitempty"`
+	ServiceTierFrom   string `json:"service_tier_from,omitempty"`
+	ServiceTierTo     string `json:"service_tier_to,omitempty"`
 	// FromDisplay/ToDisplay are the human-friendly model names (e.g. "Claude
 	// Opus 4.8") the UI shows instead of raw ids. Empty when unknown or when
 	// the model didn't change; the UI falls back to From/To.
@@ -2355,6 +2357,12 @@ type ModelSettingsChange struct {
 	ReasoningSet bool   // whether reasoning is being changed
 	OldReasoning string // user-facing name ("" means service default)
 	NewReasoning string // user-facing name ("" means service default)
+
+	RequestOptionsSet bool
+	OldReasoningMode  string
+	NewReasoningMode  string
+	OldServiceTier    string
+	NewServiceTier    string
 }
 
 // GetThinkingLevel returns the conversation's current user-facing reasoning
@@ -2365,6 +2373,14 @@ func (cm *ConversationManager) GetThinkingLevel() string {
 	return cm.conversationOptions.ThinkingLevel
 }
 
+// GetModelRequestOptions returns the provider request options attached to the
+// conversation. Empty values select the provider defaults.
+func (cm *ConversationManager) GetModelRequestOptions() (reasoningMode, serviceTier string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.conversationOptions.ReasoningMode, cm.conversationOptions.ServiceTier
+}
+
 // ApplyModelSettings changes the model and/or reasoning level the conversation
 // uses for subsequent turns. It persists the new settings, drops the in-memory
 // loop so the next turn rehydrates from the DB with the new model's service and
@@ -2373,29 +2389,27 @@ func (cm *ConversationManager) GetThinkingLevel() string {
 // level are baked into the loop at build time, so any change requires a loop
 // rebuild.
 func (cm *ConversationManager) ApplyModelSettings(ctx context.Context, ch ModelSettingsChange) error {
-	// Persist the reasoning level into the conversation options and mirror it
-	// in memory. The loop reset below marks the manager unhydrated, so the next
-	// turn re-reads options from the DB anyway; the in-memory update keeps state
-	// consistent for any reader that runs before rehydration.
-	if ch.ReasoningSet {
-		cm.mu.Lock()
-		opts := cm.conversationOptions
-		opts.ThinkingLevel = ch.NewReasoning
-		cm.conversationOptions = opts
-		cm.mu.Unlock()
-		if err := cm.db.UpdateConversationOptions(ctx, cm.conversationID, opts); err != nil {
-			return fmt.Errorf("failed to persist reasoning level: %w", err)
-		}
-	}
+	cm.modelSettingsMu.Lock()
+	defer cm.modelSettingsMu.Unlock()
 
-	// Persist the new model. ForceUpdateConversationModel overwrites the
-	// existing value (unlike UpdateConversationModel, which only sets a NULL
-	// model).
+	change := db.ConversationModelOptionsChange{}
 	if ch.NewModel != "" {
-		if err := cm.db.ForceUpdateConversationModel(ctx, cm.conversationID, ch.NewModel); err != nil {
-			return fmt.Errorf("failed to persist model switch: %w", err)
-		}
+		change.Model = &ch.NewModel
 	}
+	if ch.ReasoningSet {
+		change.ThinkingLevel = &ch.NewReasoning
+	}
+	if ch.RequestOptionsSet {
+		change.ReasoningMode = &ch.NewReasoningMode
+		change.ServiceTier = &ch.NewServiceTier
+	}
+	opts, err := cm.db.UpdateConversationModelOptions(ctx, cm.conversationID, change)
+	if err != nil {
+		return fmt.Errorf("failed to persist model settings: %w", err)
+	}
+	cm.mu.Lock()
+	cm.conversationOptions = opts
+	cm.mu.Unlock()
 
 	// Drop the loop pinned to the old settings so the next user message rebuilds
 	// it via ensureLoop. When a turn is active we must go through
@@ -2454,6 +2468,18 @@ func buildModelChangeUserData(ch ModelSettingsChange) ModelChangeUserData {
 		ud.ReasoningTo = reasoningDisplayName(ch.NewReasoning)
 		parts = append(parts, fmt.Sprintf("reasoning changed from %s to %s", ud.ReasoningFrom, ud.ReasoningTo))
 	}
+	if ch.RequestOptionsSet {
+		ud.ReasoningModeFrom = ch.OldReasoningMode
+		ud.ReasoningModeTo = ch.NewReasoningMode
+		ud.ServiceTierFrom = ch.OldServiceTier
+		ud.ServiceTierTo = ch.NewServiceTier
+		if ch.OldReasoningMode != ch.NewReasoningMode {
+			parts = append(parts, toggleChangeSummary("Pro mode", ch.NewReasoningMode == llm.ReasoningModePro))
+		}
+		if ch.OldServiceTier != ch.NewServiceTier {
+			parts = append(parts, toggleChangeSummary("Fast mode", ch.NewServiceTier == llm.ServiceTierFast))
+		}
+	}
 
 	summary := strings.Join(parts, "; ")
 	if summary != "" {
@@ -2463,6 +2489,13 @@ func buildModelChangeUserData(ch ModelSettingsChange) ModelChangeUserData {
 	}
 	ud.Text = summary
 	return ud
+}
+
+func toggleChangeSummary(name string, enabled bool) string {
+	if enabled {
+		return name + " enabled"
+	}
+	return name + " disabled"
 }
 
 // reasoningDisplayName maps a stored reasoning level to a user-facing name,

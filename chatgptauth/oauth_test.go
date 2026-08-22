@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -191,6 +192,38 @@ func TestAuthenticatedTransportRefreshesOnceOnUnauthorized(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedTransportDoesNotRetryNonReplayableBody(t *testing.T) {
+	now := time.Date(2026, 8, 21, 1, 0, 0, 0, time.UTC)
+	store := &memoryStore{loaded: true, credentials: Credentials{
+		AccessToken: "access", RefreshToken: "refresh", AccountID: "account-123", ExpiresAt: now.Add(time.Hour),
+	}}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("unauthorized"))
+	}))
+	defer server.Close()
+
+	manager := NewManager(store, Config{HTTPClient: server.Client(), Now: func() time.Time { return now }})
+	req, err := http.NewRequest(http.MethodPost, server.URL, io.NopCloser(strings.NewReader("payload")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := manager.HTTPClient(server.Client()).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusUnauthorized || requests != 1 || string(body) != "unauthorized" {
+		t.Fatalf("status=%d requests=%d body=%q", response.StatusCode, requests, body)
+	}
+}
+
 func TestAccountIDFromTokensSupportsKnownClaimShapes(t *testing.T) {
 	for name, claims := range map[string]map[string]any{
 		"namespaced string": {"https://api.openai.com/auth/account_id": "account-a"},
@@ -202,6 +235,37 @@ func TestAccountIDFromTokensSupportsKnownClaimShapes(t *testing.T) {
 				t.Fatalf("account ID = %q", got)
 			}
 		})
+	}
+}
+
+func TestTokenFileHTTPClientReadsRotatedTokenOnEveryRequest(t *testing.T) {
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var authorizations []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client := TokenFileHTTPClient(server.Client(), tokenFile)
+	response, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if err := os.WriteFile(tokenFile, []byte("second\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	response, err = client.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if len(authorizations) != 2 || authorizations[0] != "Bearer first" || authorizations[1] != "Bearer second" {
+		t.Fatalf("authorizations = %v", authorizations)
 	}
 }
 
