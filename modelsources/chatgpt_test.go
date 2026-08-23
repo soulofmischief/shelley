@@ -3,10 +3,12 @@ package modelsources
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"shelley.exe.dev/chatgptauth"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/oai"
 	"shelley.exe.dev/models"
@@ -95,6 +97,20 @@ func TestBuildChatGPTPreservesUnknownModels(t *testing.T) {
 	service := built[0].Service.(*oai.ResponsesService)
 	if service.SupportsImages() || service.Model.ModelName != "future-codex" {
 		t.Fatalf("unknown model service = %+v", service)
+	}
+}
+
+func TestBuildChatGPTMapsUnauthorizedToNotAuthenticated(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "Pillar Codex authentication is required", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	_, err := BuildChatGPT(
+		context.Background(), models.All(), server.URL, "dev", server.Client(), map[string]bool{}, nil,
+	)
+	if !errors.Is(err, chatgptauth.ErrNotAuthenticated) {
+		t.Fatalf("error = %v, want ErrNotAuthenticated", err)
 	}
 }
 

@@ -540,6 +540,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	}
 
 	// Version endpoints
+	mux.Handle("GET /healthz", http.HandlerFunc(handleHealth))
 	mux.Handle("GET /version", http.HandlerFunc(s.handleVersion))
 	mux.Handle("GET /version-check", http.HandlerFunc(s.handleVersionCheck))
 	mux.Handle("GET /version-changelog", http.HandlerFunc(s.handleVersionChangelog))

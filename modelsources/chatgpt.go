@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"shelley.exe.dev/chatgptauth"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/oai"
 	"shelley.exe.dev/models"
@@ -77,6 +78,9 @@ func BuildChatGPT(ctx context.Context, catalog []models.Model, baseURL, clientVe
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, fmt.Errorf("read ChatGPT models: %w", err)
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, chatgptauth.ErrNotAuthenticated
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("ChatGPT models endpoint returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
