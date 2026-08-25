@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 )
@@ -174,8 +173,9 @@ func listAllTags(cc *clientConfig, client *http.Client, baseURL string, limit in
 }
 
 // cmdTag implements "shelley client tag".
-func cmdTag(cc *clientConfig, args []string) {
-	fs := flag.NewFlagSet("client tag", flag.ExitOnError)
+func cmdTag(cc *clientConfig, args []string) error {
+	fs := flag.NewFlagSet("client tag", flag.ContinueOnError)
+	fs.SetOutput(cc.stderr)
 	remove := fs.Bool("rm", false, "Remove the given tags instead of adding them")
 	set := fs.Bool("set", false, "Replace the tag list with the given tags (no args clears all tags)")
 	fs.Usage = func() {
@@ -185,23 +185,23 @@ func cmdTag(cc *clientConfig, args []string) {
 		fmt.Fprintf(fs.Output(), "Flags:\n")
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	if fs.NArg() == 0 {
 		fs.Usage()
-		os.Exit(1)
+		return fmt.Errorf("conversation ID required")
 	}
 	if *remove && *set {
-		fmt.Fprintf(os.Stderr, "Error: -rm and -set are mutually exclusive\n")
-		os.Exit(1)
+		return fmt.Errorf("-rm and -set are mutually exclusive")
 	}
 	conversationID := fs.Arg(0)
 	tagArgs := fs.Args()[1:]
 
 	client, baseURL, err := cc.newHTTPClient()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	var tags []string
@@ -222,22 +222,25 @@ func cmdTag(cc *clientConfig, args []string) {
 		}
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	if tags == nil {
 		tags = []string{}
 	}
-	json.NewEncoder(os.Stdout).Encode(map[string]any{
+	if err := json.NewEncoder(cc.output.writer).Encode(map[string]any{
 		"conversation_id": conversationID,
 		"tags":            tags,
-	})
+	}); err != nil {
+		return fmt.Errorf("write tags: %w", err)
+	}
+	return nil
 }
 
 // cmdTags implements "shelley client tags": the tags already in use, for
 // pickers and shell completion.
-func cmdTags(cc *clientConfig, args []string) {
-	fs := flag.NewFlagSet("client tags", flag.ExitOnError)
+func cmdTags(cc *clientConfig, args []string) error {
+	fs := flag.NewFlagSet("client tags", flag.ContinueOnError)
+	fs.SetOutput(cc.stderr)
 	limit := fs.Int("limit", 5000, "Maximum conversations to scan per list")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: shelley client tags [flags]\n\n")
@@ -245,20 +248,23 @@ func cmdTags(cc *clientConfig, args []string) {
 		fmt.Fprintf(fs.Output(), "Flags:\n")
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	client, baseURL, err := cc.newHTTPClient()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	tags, err := listAllTags(cc, client, baseURL, *limit)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(cc.output.writer)
 	for _, t := range tags {
-		enc.Encode(t)
+		if err := enc.Encode(t); err != nil {
+			return fmt.Errorf("write tag list: %w", err)
+		}
 	}
+	return nil
 }
