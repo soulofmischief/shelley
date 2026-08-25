@@ -50,7 +50,6 @@ type chatGPTConfig struct {
 	Mode      string `json:"mode"`
 	BaseURL   string `json:"base_url"`
 	TokenFile string `json:"token_file"`
-	ReauthURL string `json:"reauth_url"`
 }
 
 type exeEnvironmentConfig struct {
@@ -526,9 +525,14 @@ func buildChatGPTRuntime(config *chatGPTConfig, database *db.DB, httpc *http.Cli
 	if config.BaseURL == "" || config.TokenFile == "" {
 		return nil, "", nil, fmt.Errorf("chatgpt pillar mode requires base_url and token_file")
 	}
+	baseURL := strings.TrimSuffix(config.BaseURL, "/")
+	pillarHTTPClient := chatgptauth.TokenFileHTTPClient(httpc, config.TokenFile)
 	return &server.ChatGPTAuthConfig{
-		Mode: server.ChatGPTAuthModePillar, ReauthURL: config.ReauthURL,
-	}, strings.TrimSuffix(config.BaseURL, "/"), chatgptauth.TokenFileHTTPClient(httpc, config.TokenFile), nil
+		Mode: server.ChatGPTAuthModePillar,
+		PlatformStatus: func(ctx context.Context) (chatgptauth.PlatformStatus, error) {
+			return chatgptauth.FetchPlatformStatus(ctx, pillarHTTPClient, baseURL)
+		},
+	}, baseURL, pillarHTTPClient, nil
 }
 
 func insertBeforePredictable(existing, additions []models.Built) []models.Built {

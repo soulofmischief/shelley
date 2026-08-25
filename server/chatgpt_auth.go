@@ -33,13 +33,15 @@ type chatGPTAuthController struct {
 }
 
 type chatGPTAuthStatus struct {
-	Mode          string `json:"mode"`
-	Configured    bool   `json:"configured"`
-	Authenticated bool   `json:"authenticated"`
-	AccountID     string `json:"account_id,omitempty"`
-	ExpiresAt     string `json:"expires_at,omitempty"`
-	ReauthURL     string `json:"reauth_url,omitempty"`
-	Error         string `json:"error,omitempty"`
+	Mode           string `json:"mode"`
+	Configured     bool   `json:"configured"`
+	Authenticated  bool   `json:"authenticated"`
+	ReauthRequired bool   `json:"reauth_required,omitempty"`
+	AccountID      string `json:"account_id,omitempty"`
+	ExpiresAt      string `json:"expires_at,omitempty"`
+	ReauthURL      string `json:"reauth_url,omitempty"`
+	ReauthCommand  string `json:"reauth_command,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
 
 func newChatGPTAuthController(config ChatGPTAuthConfig, refreshModels func(context.Context) error, logger *slog.Logger) *chatGPTAuthController {
@@ -59,10 +61,23 @@ func (c *chatGPTAuthController) registerRoutes(mux *http.ServeMux) {
 }
 
 func (c *chatGPTAuthController) handleStatus(w http.ResponseWriter, r *http.Request) {
-	status := chatGPTAuthStatus{Mode: c.config.Mode, ReauthURL: c.config.ReauthURL}
+	status := chatGPTAuthStatus{Mode: c.config.Mode}
 	switch c.config.Mode {
 	case ChatGPTAuthModePillar:
-		status.Configured = true
+		status.Configured = c.config.PlatformStatus != nil
+		if c.config.PlatformStatus != nil {
+			platformStatus, err := c.config.PlatformStatus(r.Context())
+			if err != nil {
+				status.Error = err.Error()
+				break
+			}
+			status.Authenticated = platformStatus.Authenticated
+			status.ReauthRequired = platformStatus.ReauthRequired
+			status.AccountID = platformStatus.AccountID
+			status.ExpiresAt = platformStatus.ExpiresAt
+			status.ReauthURL = platformStatus.ReauthURL
+			status.ReauthCommand = platformStatus.ReauthCommand
+		}
 	case ChatGPTAuthModeStandalone:
 		status.Configured = c.config.Manager != nil
 		if c.config.Manager != nil {

@@ -16,8 +16,14 @@ func TestChatGPTAuthPillarModeHidesStandaloneControls(t *testing.T) {
 	t.Parallel()
 
 	controller := newChatGPTAuthController(ChatGPTAuthConfig{
-		Mode:      ChatGPTAuthModePillar,
-		ReauthURL: "https://pillar.example/auth",
+		Mode: ChatGPTAuthModePillar,
+		PlatformStatus: func(context.Context) (chatgptauth.PlatformStatus, error) {
+			return chatgptauth.PlatformStatus{
+				Authenticated: true,
+				AccountID:     "account-123",
+				ExpiresAt:     "2026-08-25T12:00:00Z",
+			}, nil
+		},
 	}, func(context.Context) error { return nil }, nil)
 	mux := http.NewServeMux()
 	controller.registerRoutes(mux)
@@ -31,7 +37,7 @@ func TestChatGPTAuthPillarModeHidesStandaloneControls(t *testing.T) {
 	if err := json.NewDecoder(statusRecorder.Body).Decode(&status); err != nil {
 		t.Fatal(err)
 	}
-	if status.Mode != ChatGPTAuthModePillar || !status.Configured || status.ReauthURL != "https://pillar.example/auth" {
+	if status.Mode != ChatGPTAuthModePillar || !status.Configured || !status.Authenticated || status.AccountID != "account-123" {
 		t.Fatalf("unexpected Pillar status: %+v", status)
 	}
 
@@ -39,6 +45,32 @@ func TestChatGPTAuthPillarModeHidesStandaloneControls(t *testing.T) {
 	mux.ServeHTTP(startRecorder, httptest.NewRequest(http.MethodPost, "/api/chatgpt-auth/start", nil))
 	if startRecorder.Code != http.StatusConflict {
 		t.Fatalf("start code = %d, want %d", startRecorder.Code, http.StatusConflict)
+	}
+}
+
+func TestChatGPTAuthPillarModeReportsReauthentication(t *testing.T) {
+	t.Parallel()
+
+	controller := newChatGPTAuthController(ChatGPTAuthConfig{
+		Mode: ChatGPTAuthModePillar,
+		PlatformStatus: func(context.Context) (chatgptauth.PlatformStatus, error) {
+			return chatgptauth.PlatformStatus{
+				ReauthRequired: true,
+				ReauthCommand:  "ssh -L 1455:localhost:8080 x.spacecats.dev codex oauth",
+			}, nil
+		},
+	}, func(context.Context) error { return nil }, nil)
+	mux := http.NewServeMux()
+	controller.registerRoutes(mux)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/chatgpt-auth", nil))
+
+	var status chatGPTAuthStatus
+	if err := json.NewDecoder(recorder.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Authenticated || !status.ReauthRequired || status.ReauthCommand == "" {
+		t.Fatalf("unexpected Pillar status: %+v", status)
 	}
 }
 

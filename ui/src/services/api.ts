@@ -48,9 +48,11 @@ export interface ChatGPTAuthStatus {
   mode: "standalone" | "pillar";
   configured: boolean;
   authenticated: boolean;
+  reauth_required?: boolean;
   account_id?: string;
   expires_at?: string;
   reauth_url?: string;
+  reauth_command?: string;
   error?: string;
 }
 

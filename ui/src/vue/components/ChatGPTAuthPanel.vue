@@ -3,12 +3,20 @@
     <div class="chatgpt-auth-copy">
       <div class="chatgpt-auth-heading">
         <span id="chatgpt-auth-title">ChatGPT</span>
-        <span :class="`chatgpt-auth-state ${status.authenticated ? 'connected' : status.mode}`">
+        <span :class="`chatgpt-auth-state ${statusClass}`">
           {{ statusLabel }}
         </span>
       </div>
-      <p v-if="status.mode === 'pillar'">
+      <p v-if="status.mode === 'pillar' && status.authenticated">
         Your ChatGPT subscription is managed by Pillar and automatically shared with Shelley.
+        <span v-if="status.account_id"> Account {{ status.account_id }}.</span>
+        <span v-if="status.expires_at"> Session renews automatically after {{ formattedExpiry }}.</span>
+      </p>
+      <p v-else-if="status.mode === 'pillar' && status.reauth_required">
+        Your Pillar ChatGPT session needs to be renewed.
+      </p>
+      <p v-else-if="status.mode === 'pillar'">
+        Pillar manages the ChatGPT subscription used by Shelley.
       </p>
       <p v-else-if="status.authenticated">
         <span v-if="status.account_id">Account {{ status.account_id }}</span>
@@ -22,6 +30,10 @@
       <p v-if="panelError || status.error" class="chatgpt-auth-error">
         {{ panelError || status.error }}
       </p>
+      <div v-if="status.mode === 'pillar' && status.reauth_command" class="chatgpt-auth-command">
+        <span>Run this command from your computer:</span>
+        <code>{{ status.reauth_command }}</code>
+      </div>
       <template v-if="flow && status.mode === 'standalone' && !status.authenticated">
         <p class="chatgpt-auth-flow-note">
           Complete sign-in in the browser. This panel will update automatically.
@@ -85,6 +97,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import Button from "primevue/button";
 import { api, type ChatGPTAuthFlow, type ChatGPTAuthStatus } from "../../services/api";
+import { chatGPTAuthStatusClass, chatGPTAuthStatusLabel } from "./chatGPTAuthStatus";
 
 const props = defineProps<{ active: boolean }>();
 const emit = defineEmits<{ (e: "modelsChanged"): void }>();
@@ -97,10 +110,8 @@ const busy = ref(false);
 let pollTimer: number | null = null;
 let polling = false;
 
-const statusLabel = computed(() => {
-  if (status.value?.mode === "pillar") return "Managed by Pillar";
-  return status.value?.authenticated ? "Connected" : "Not connected";
-});
+const statusLabel = computed(() => (status.value ? chatGPTAuthStatusLabel(status.value) : ""));
+const statusClass = computed(() => (status.value ? chatGPTAuthStatusClass(status.value) : ""));
 
 const formattedExpiry = computed(() => {
   if (!status.value?.expires_at) return "";

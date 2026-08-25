@@ -48,7 +48,7 @@ type LLMConfig struct {
 }
 
 type ChatGPTAuthConfig struct {
-	Mode      string
-	Manager   *chatgptauth.Manager
-	ReauthURL string
+	Mode           string
+	Manager        *chatgptauth.Manager
+	PlatformStatus func(context.Context) (chatgptauth.PlatformStatus, error)
 }
