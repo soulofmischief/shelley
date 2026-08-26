@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -138,6 +139,56 @@ func TestRunRejectsImmediateEphemeralCombination(t *testing.T) {
 		strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "cannot be used together") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunDispatchesTagCommands(t *testing.T) {
+	tagServer := &fakeTagServer{
+		tags: map[string][]string{"conv1": {"alpha"}},
+		list: []map[string]any{{"conversation_id": "conv1", "tags": `["alpha","beta"]`}},
+	}
+	server := httptest.NewServer(tagServer.handler())
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"-url", server.URL, "tag", "conv1", "beta"},
+		strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprint(tagServer.tags["conv1"]), "[alpha beta]"; got != want {
+		t.Fatalf("stored tags = %s, want %s", got, want)
+	}
+	var tagged struct {
+		ConversationID string   `json:"conversation_id"`
+		Tags           []string `json:"tags"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &tagged); err != nil {
+		t.Fatal(err)
+	}
+	if tagged.ConversationID != "conv1" || fmt.Sprint(tagged.Tags) != "[alpha beta]" {
+		t.Fatalf("tag output = %+v", tagged)
+	}
+
+	stdout.Reset()
+	if err := run([]string{"-url", server.URL, "tags"},
+		strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var listed []tagCount
+	decoder := json.NewDecoder(&stdout)
+	for {
+		var tag tagCount
+		err := decoder.Decode(&tag)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed = append(listed, tag)
+	}
+	if got, want := fmt.Sprint(listed), "[{alpha 1} {beta 1}]"; got != want {
+		t.Fatalf("tags output = %s, want %s", got, want)
 	}
 }
 
