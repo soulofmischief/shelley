@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -189,6 +190,102 @@ func TestAuthenticatedTransportRefreshesOnceOnUnauthorized(t *testing.T) {
 	}
 	if stored.RefreshToken != "refresh-1" {
 		t.Fatalf("rotated response erased refresh token: %+v", stored)
+	}
+}
+
+func TestCredentialsCoalesceConcurrentRefreshes(t *testing.T) {
+	now := time.Date(2026, 8, 25, 1, 0, 0, 0, time.UTC)
+	store := &memoryStore{loaded: true, credentials: Credentials{
+		AccessToken: "expired", RefreshToken: "refresh-1",
+		IDToken:   jwt(t, map[string]any{"chatgpt_account_id": "account-123"}),
+		AccountID: "account-123", ExpiresAt: now,
+	}}
+	var mu sync.Mutex
+	refreshes := 0
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		refreshes++
+		mu.Unlock()
+		json.NewEncoder(w).Encode(tokenResponse{AccessToken: "fresh", ExpiresIn: 3600})
+	}))
+	defer issuer.Close()
+
+	manager := NewManager(store, Config{Issuer: issuer.URL, HTTPClient: issuer.Client(), Now: func() time.Time { return now }})
+	start := make(chan struct{})
+	errors := make(chan error, 8)
+	var wait sync.WaitGroup
+	for range 8 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			credentials, err := manager.Credentials(context.Background())
+			if err == nil && credentials.AccessToken != "fresh" {
+				err = fmt.Errorf("access token = %q", credentials.AccessToken)
+			}
+			errors <- err
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if refreshes != 1 {
+		t.Fatalf("refreshes = %d, want 1", refreshes)
+	}
+}
+
+func TestConcurrentPKCEFlowsRemainIndependent(t *testing.T) {
+	now := time.Date(2026, 8, 25, 1, 0, 0, 0, time.UTC)
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Error(err)
+			return
+		}
+		code := r.Form.Get("code")
+		json.NewEncoder(w).Encode(tokenResponse{
+			AccessToken:  code + "-access",
+			RefreshToken: code + "-refresh",
+			IDToken:      jwt(t, map[string]any{"chatgpt_account_id": "account-123"}),
+			ExpiresIn:    3600,
+		})
+	}))
+	defer issuer.Close()
+
+	manager := NewManager(&memoryStore{}, Config{Issuer: issuer.URL, HTTPClient: issuer.Client(), Now: func() time.Time { return now }})
+	first, err := manager.StartFlow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.StartFlow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.State == second.State {
+		t.Fatal("concurrent flows received the same state")
+	}
+	for _, flow := range []struct {
+		value Flow
+		code  string
+	}{{second, "second"}, {first, "first"}} {
+		callback := DefaultRedirectURI + "?code=" + flow.code + "&state=" + url.QueryEscape(flow.value.State)
+		credentials, err := manager.CompleteFlow(context.Background(), callback)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if credentials.AccessToken != flow.code+"-access" {
+			t.Fatalf("access token = %q", credentials.AccessToken)
+		}
+	}
+	callback := DefaultRedirectURI + "?code=replay&state=" + url.QueryEscape(first.State)
+	if _, err := manager.CompleteFlow(context.Background(), callback); err == nil {
+		t.Fatal("completed OAuth state was accepted twice")
 	}
 }
 

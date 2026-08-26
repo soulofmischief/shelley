@@ -18,7 +18,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
           cache: true
 
       - name: Set up pnpm
@@ -50,6 +50,16 @@ jobs:
         run: |
           cd ui
           pnpm test
+
+      - name: Check UI types and lint
+        run: |
+          cd ui
+          pnpm run type-check
+          pnpm run type-check:vue
+          pnpm run lint
+
+      - name: Test release metadata generator
+        run: python3 -m unittest scripts/test_generate_version_metadata.py
 
       - name: Build UI
         run: |

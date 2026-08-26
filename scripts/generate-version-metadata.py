@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 
@@ -17,8 +18,6 @@ def get_headless_shell_release(repository: str) -> tuple[str, str] | None:
     Returns (version_string, tag) like ('Chromium 147.0.7727.24', 'headless-shell/v147.0.7727.24')
     or None if no release exists.
     """
-    import urllib.request
-
     # Releases are newest-first. Follow pagination because Shelley releases
     # frequently enough for browser releases to fall off the first page.
     url = f"https://api.github.com/repos/{repository}/releases?per_page=100"
@@ -50,21 +49,34 @@ def get_headless_shell_release(repository: str) -> tuple[str, str] | None:
     return None
 
 
-def generate_release_json(
-    output_dir: Path, release_repository: str, headless_shell_repository: str
-) -> None:
-    """Generate release.json with latest release information."""
-    # Get latest tag - fail if none exists
-    result = subprocess.run(
-        ["git", "describe", "--tags", "--abbrev=0"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        print("ERROR: No tags found. Run this after creating a release.", file=sys.stderr)
-        sys.exit(1)
+def get_latest_release(repository: str) -> tuple[str, str]:
+    """Return the latest published fork release tag and publication time."""
+    url = f"https://api.github.com/repos/{repository}/releases/latest"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "shelley-version-metadata",
+    }
+    if token := os.environ.get("GITHUB_TOKEN"):
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        release = json.load(resp)
 
-    latest_tag = result.stdout.strip()
+    tag = release.get("tag_name", "")
+    published_at = release.get("published_at", "")
+    if not tag or not published_at:
+        raise RuntimeError("latest fork release is missing its tag or publication time")
+    return tag, published_at
+
+
+def generate_release_json(
+    output_dir: Path,
+    release_repository: str,
+    headless_shell_repository: str,
+    latest_tag: str,
+    published_at: str,
+) -> None:
+    """Generate release.json for the selected fork release."""
     latest_commit = subprocess.check_output(
         ["git", "rev-list", "-n", "1", latest_tag], text=True
     ).strip()
@@ -72,14 +84,6 @@ def generate_release_json(
     latest_commit_time = subprocess.check_output(
         ["git", "show", "-s", "--format=%cI", latest_commit], text=True
     ).strip()
-    # Use for-each-ref to reliably get the tag creation time.
-    # 'git show -s --format=%cI <tag>' on annotated tags returns the full
-    # tag message instead of just the date.
-    published_at = subprocess.check_output(
-        ["git", "for-each-ref", "--format=%(creatordate:iso-strict)",
-         f"refs/tags/{latest_tag}"], text=True
-    ).strip()
-
     version = latest_tag[1:] if latest_tag.startswith("v") else latest_tag
 
     base_url = f"https://github.com/{release_repository}/releases/download/{latest_tag}"
@@ -120,10 +124,10 @@ def generate_release_json(
     print(f"Generated {output_path}")
 
 
-def generate_commits_json(output_dir: Path, count: int = 500) -> None:
+def generate_commits_json(output_dir: Path, ref: str, count: int = 500) -> None:
     """Generate commits.json with recent commits."""
     output = subprocess.check_output(
-        ["git", "log", f"--pretty=format:%h%x00%s", f"-{count}", "HEAD"],
+        ["git", "log", f"--pretty=format:%h%x00%s", f"-{count}", ref],
         text=True,
     )
 
@@ -165,8 +169,19 @@ def main() -> None:
     release_repository = os.environ["GITHUB_REPOSITORY"]
     headless_shell_repository = os.environ["HEADLESS_SHELL_REPOSITORY"]
 
-    generate_release_json(output_dir, release_repository, headless_shell_repository)
-    generate_commits_json(output_dir)
+    try:
+        release_tag, published_at = get_latest_release(release_repository)
+    except RuntimeError as error:
+        print(f"ERROR: {error}.", file=sys.stderr)
+        sys.exit(1)
+    generate_release_json(
+        output_dir,
+        release_repository,
+        headless_shell_repository,
+        release_tag,
+        published_at,
+    )
+    generate_commits_json(output_dir, release_tag)
     generate_index_html(output_dir, release_repository)
 
 
