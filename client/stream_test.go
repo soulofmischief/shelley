@@ -31,8 +31,8 @@ func TestStreamRendererFiltersReplayBeforeLatestUser(t *testing.T) {
 	if !finished {
 		t.Fatal("expected completed replayed turn")
 	}
-	if got := output.String(); got != "new answer" {
-		t.Fatalf("output = %q, want %q", got, "new answer")
+	if got := output.String(); got != "new answer\n" {
+		t.Fatalf("output = %q, want %q", got, "new answer\\n")
 	}
 }
 
@@ -52,6 +52,62 @@ func TestStreamRendererDoesNotStopOnHistoricalTurn(t *testing.T) {
 	}
 	if finished {
 		t.Fatal("historical end-of-turn completed the current turn")
+	}
+}
+
+func TestStreamRendererReadModeHidesSystemPromptAndFormatsRoles(t *testing.T) {
+	var output bytes.Buffer
+	renderer := newStreamRenderer(outputConfig{writer: &output}, streamMode{
+		stopAtEndOfTurn: true,
+		readMode:        true,
+	})
+	finished, err := renderer.consume(streamResponseWire{
+		Messages: []messageWire{
+			message(1, "system", "private system prompt", false),
+			message(2, "user", "question", false),
+			message(3, "agent", "answer", true),
+		},
+		SnapshotComplete: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !finished {
+		t.Fatal("expected completed turn")
+	}
+	if got := output.String(); got != "USER: question\n\nAGENT: answer\n\n" {
+		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestStreamRendererReadModePrefixesLiveAgentDelta(t *testing.T) {
+	var output bytes.Buffer
+	renderer := newStreamRenderer(outputConfig{writer: &output}, streamMode{
+		stopAtEndOfTurn: true,
+		readMode:        true,
+	})
+	if _, err := renderer.consume(streamResponseWire{
+		Messages:         []messageWire{message(1, "user", "question", false)},
+		SnapshotComplete: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := renderer.consume(streamResponseWire{
+		StreamDelta: &streamDeltaWire{Type: "text", Text: "streamed", Seq: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	finished, err := renderer.consume(streamResponseWire{
+		Messages: []messageWire{message(2, "agent", "streamed", true)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !finished {
+		t.Fatal("expected completed turn")
+	}
+	if got := output.String(); got != "USER: question\n\nAGENT: streamed\n\n" {
+		t.Fatalf("output = %q", got)
 	}
 }
 
@@ -84,7 +140,7 @@ func TestStreamRendererStreamsDeltasWithoutRepeatingFinalText(t *testing.T) {
 	if !finished {
 		t.Fatal("expected end of turn")
 	}
-	if got := output.String(); got != "consideranswer\n[shell]\n" {
+	if got := output.String(); got != "consideranswer\n[shell]\n\n" {
 		t.Fatalf("output = %q", got)
 	}
 }

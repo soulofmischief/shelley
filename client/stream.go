@@ -11,6 +11,7 @@ import (
 type streamMode struct {
 	onlyAfterLastUser bool
 	stopAtEndOfTurn   bool
+	readMode          bool
 }
 
 type streamRenderer struct {
@@ -104,10 +105,16 @@ func (r *streamRenderer) consumeDelta(delta streamDeltaWire) error {
 
 	switch delta.Type {
 	case "thinking":
+		if err := r.startLiveAgent(); err != nil {
+			return err
+		}
 		r.streamedThinking = true
 		_, err := fmt.Fprint(r.output.writer, r.output.dim(delta.Text))
 		return err
 	case "text":
+		if err := r.startLiveAgent(); err != nil {
+			return err
+		}
 		r.streamedText = true
 		_, err := fmt.Fprint(r.output.writer, delta.Text)
 		return err
@@ -118,14 +125,27 @@ func (r *streamRenderer) consumeDelta(delta streamDeltaWire) error {
 	}
 }
 
+func (r *streamRenderer) startLiveAgent() error {
+	if !r.mode.readMode || r.streamedText || r.streamedThinking {
+		return nil
+	}
+	_, err := fmt.Fprint(r.output.writer, r.output.cyan("AGENT: "))
+	return err
+}
+
 func (r *streamRenderer) consumeMessage(message messageWire) (bool, error) {
 	if r.seenMessages[message.SequenceID] {
 		return false, nil
 	}
 	r.seenMessages[message.SequenceID] = true
 
+	hadStreamedContent := r.streamedText || r.streamedThinking
 	if r.output.jsonLines {
 		if err := writeJSONLine(r.output.writer, simplifyMessage(message)); err != nil {
+			return false, err
+		}
+	} else if r.mode.readMode && !hadStreamedContent {
+		if err := r.output.printReadMessage(message); err != nil {
 			return false, err
 		}
 	} else if err := r.output.printMessage(message, !r.streamedText, !r.streamedThinking); err != nil {
@@ -136,6 +156,16 @@ func (r *streamRenderer) consumeMessage(message messageWire) (bool, error) {
 	if message.Type == "agent" || message.Type == "error" {
 		r.streamedText = false
 		r.streamedThinking = false
+	}
+	if finished && !r.output.jsonLines {
+		if r.mode.readMode && hadStreamedContent {
+			_, err := fmt.Fprint(r.output.writer, "\n\n")
+			return true, err
+		}
+		if !r.mode.readMode {
+			_, err := fmt.Fprintln(r.output.writer)
+			return true, err
+		}
 	}
 	return finished, nil
 }
@@ -180,11 +210,6 @@ func streamConversation(cc *clientConfig, client *http.Client, baseURL, conversa
 			return err
 		}
 		if finished {
-			if !cc.output.jsonLines {
-				if _, err := fmt.Fprintln(cc.output.writer); err != nil {
-					return err
-				}
-			}
 			return nil
 		}
 	}

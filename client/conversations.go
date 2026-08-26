@@ -25,7 +25,10 @@ func cmdRead(cc *clientConfig, args []string) error {
 		return err
 	}
 	if *follow {
-		return streamConversation(cc, client, baseURL, fs.Arg(0), streamMode{stopAtEndOfTurn: true})
+		return streamConversation(cc, client, baseURL, fs.Arg(0), streamMode{
+			stopAtEndOfTurn: true,
+			readMode:        true,
+		})
 	}
 	return readSnapshot(cc, client, baseURL, fs.Arg(0))
 }
