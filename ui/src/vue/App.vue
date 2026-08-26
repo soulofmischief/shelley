@@ -227,6 +227,7 @@ import type { EphemeralTerminal } from "./components/terminalTypes";
 import { focusMessageInputIfUnfocused } from "../utils/focusMessageInput";
 import { tildifyPath } from "../utils/tildify";
 import { resolveAbsPath } from "../utils/absPath";
+import { needsOptimisticWorkingState } from "../utils/newConversationState";
 import {
   type Conversation,
   type ConversationWithState,
@@ -721,7 +722,12 @@ async function handleFirstMessage(
       conversation_options: conversationOptions,
     });
     const newConversationId = response.conversation_id;
-    messageStore.setAgentWorking(newConversationId, true);
+    // A fast model can finish and publish the authoritative list entry before
+    // this request returns. Preserve that state instead of overwriting its
+    // working=false transition with a late optimistic write.
+    if (needsOptimisticWorkingState(conversations.value, newConversationId)) {
+      messageStore.setAgentWorking(newConversationId, true);
+    }
     currentConversationId.value = newConversationId;
   } catch (err) {
     console.error("Failed to send first message:", err);
