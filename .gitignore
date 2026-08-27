@@ -15,6 +15,9 @@ test*.db
 # Build outputs
 /shelley
 bin/
+/dist/
+/Shelley_darwin_*.dmg
+/Shelley_darwin_*.zip
 templates/*.tar.gz
 
 # UI build outputs

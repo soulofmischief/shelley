@@ -1,6 +1,6 @@
 # Shelley Makefile
 
-.PHONY: build build-custom build-linux-aarch64 build-linux-x86 test test-go test-e2e ui serve clean help templates demo exe-scroll exe-scroll-all
+.PHONY: build build-custom build-linux-aarch64 build-linux-x86 macos-app test test-go test-e2e ui serve clean help templates demo exe-scroll exe-scroll-all
 
 # Default target
 all: build
@@ -26,6 +26,15 @@ templates:
 build: exe-scroll ui templates
 	@echo "Building Shelley..."
 	go build -o bin/shelley ./cmd/shelley
+
+# Build the same macOS application bundle used by the release workflow.
+macos-app: build
+	@case "$$(uname -m)" in \
+		arm64) ARCH=arm64 ;; \
+		x86_64) ARCH=amd64 ;; \
+		*) echo "Unsupported macOS architecture: $$(uname -m)" >&2; exit 1 ;; \
+	esac; \
+	./scripts/build-macos-app.sh "$$ARCH" bin/shelley 0.0.0 dist
 
 # Build a customized Shelley binary (see the customizing-shelley skill).
 # Stamps the release tag this branch diverged from (latest release tag at the
@@ -117,6 +126,7 @@ serve: ui
 clean:
 	@echo "Cleaning..."
 	rm -rf bin/
+	rm -rf dist/
 	rm -rf ui/dist/
 	rm -rf ui/node_modules/
 	rm -rf ui/test-results/
@@ -136,6 +146,7 @@ help:
 	@echo "  build-custom  Build a customized binary stamped as diverged from mainline"
 	@echo "  build-linux-aarch64  Build for Linux ARM64"
 	@echo "  build-linux-x86      Build for Linux x86_64"
+	@echo "  macos-app     Build dist/Shelley.app for this Mac"
 	@echo "  ui            Build UI only"
 	@echo "  templates     Build template tarballs"
 	@echo "  test          Run all tests (Go + E2E)"
@@ -148,4 +159,3 @@ help:
 	@echo "  clean         Clean build artifacts"
 	@echo "  demo          Build and (re)start the demo server"
 	@echo "  help          Show this help"
-

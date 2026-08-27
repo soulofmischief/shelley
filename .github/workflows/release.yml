@@ -90,3 +90,46 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+
+  macos-app:
+    needs: goreleaser
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Download Shelley binary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ needs.goreleaser.outputs.tag }}" \
+            -p "shelley_darwin_${{ matrix.arch }}" \
+            -D .
+
+      - name: Install app packaging dependencies
+        run: brew install librsvg
+
+      - name: Build DMG and app zip
+        run: |
+          chmod +x "shelley_darwin_${{ matrix.arch }}"
+          ./scripts/build-macos-dmg.sh "${{ matrix.arch }}" \
+            "shelley_darwin_${{ matrix.arch }}" \
+            "${{ needs.goreleaser.outputs.version }}"
+
+      - name: Upload macOS app artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.goreleaser.outputs.tag }}" \
+            "Shelley_darwin_${{ matrix.arch }}.dmg" \
+            "Shelley_darwin_${{ matrix.arch }}.zip" \
+            --clobber
