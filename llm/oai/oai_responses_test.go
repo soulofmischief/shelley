@@ -1416,9 +1416,11 @@ func TestResponsesServiceAdvancedRequestOptions(t *testing.T) {
 }
 
 func TestResponsesServiceAdvancedRequestCapabilities(t *testing.T) {
-	gpt56 := &ResponsesService{Model: GPT56Sol, ProviderName: "openai"}
-	if !gpt56.SupportsReasoningMode(llm.ReasoningModePro) || !gpt56.SupportsServiceTier(llm.ServiceTierFast) {
-		t.Fatal("GPT-5.6 OpenAI Responses service should support Pro and Fast modes")
+	for _, model := range []Model{GPT56Sol, GPT56Terra, GPT56Luna} {
+		svc := &ResponsesService{Model: model, ProviderName: "openai"}
+		if !svc.SupportsReasoningMode(llm.ReasoningModePro) || !svc.SupportsServiceTier(llm.ServiceTierFast) {
+			t.Errorf("%s OpenAI Responses service should support Pro and Fast modes", model.ModelName)
+		}
 	}
 	gpt55 := &ResponsesService{Model: GPT55, ProviderName: "openai"}
 	if gpt55.SupportsReasoningMode(llm.ReasoningModePro) || !gpt55.SupportsServiceTier(llm.ServiceTierFast) {

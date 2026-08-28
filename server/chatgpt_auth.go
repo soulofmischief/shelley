@@ -19,13 +19,23 @@ import (
 const (
 	ChatGPTAuthModeStandalone = "standalone"
 	ChatGPTAuthModePillar     = "pillar"
+	chatGPTAuthUpdateTimeout  = 30 * time.Second
 )
+
+type chatGPTModelRefreshError struct{ err error }
+
+func (e *chatGPTModelRefreshError) Error() string {
+	return "authenticated, but model refresh failed: " + e.err.Error()
+}
+
+func (e *chatGPTModelRefreshError) Unwrap() error { return e.err }
 
 type chatGPTAuthController struct {
 	config        ChatGPTAuthConfig
 	refreshModels func(context.Context) error
 	logger        *slog.Logger
 	listen        func(string, string) (net.Listener, error)
+	transitionMu  sync.Mutex
 
 	callbackMu     sync.Mutex
 	callbackServer *http.Server
@@ -81,7 +91,7 @@ func (c *chatGPTAuthController) handleStatus(w http.ResponseWriter, r *http.Requ
 	case ChatGPTAuthModeStandalone:
 		status.Configured = c.config.Manager != nil
 		if c.config.Manager != nil {
-			credentials, err := c.config.Manager.Credentials(r.Context())
+			credentials, err := c.credentials(r.Context(), c.config.Manager)
 			if err == nil {
 				status.Authenticated = true
 				status.AccountID = credentials.AccountID
@@ -131,16 +141,17 @@ func (c *chatGPTAuthController) handleComplete(w http.ResponseWriter, r *http.Re
 		http.Error(w, "invalid callback payload: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	credentials, err := manager.CompleteFlow(r.Context(), request.CallbackURL)
+	credentials, err := c.completeFlow(manager, request.CallbackURL)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		statusCode := http.StatusBadRequest
+		var refreshErr *chatGPTModelRefreshError
+		if errors.As(err, &refreshErr) {
+			statusCode = http.StatusBadGateway
+		}
+		http.Error(w, err.Error(), statusCode)
 		return
 	}
 	go c.closeCallbackListener()
-	if err := c.refreshModels(r.Context()); err != nil {
-		http.Error(w, "authenticated, but model refresh failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
 	writeJSON(w, chatGPTAuthStatus{
 		Mode: ChatGPTAuthModeStandalone, Configured: true, Authenticated: true,
 		AccountID: credentials.AccountID, ExpiresAt: credentials.ExpiresAt.UTC().Format(time.RFC3339),
@@ -152,12 +163,8 @@ func (c *chatGPTAuthController) handleLogout(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	if err := manager.Logout(r.Context()); err != nil {
+	if err := c.logout(manager); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := c.refreshModels(r.Context()); err != nil {
-		http.Error(w, "signed out, but model refresh failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -206,10 +213,7 @@ func (c *chatGPTAuthController) ensureCallbackListener(redirectURI string) (bool
 }
 
 func (c *chatGPTAuthController) handleLoopbackCallback(w http.ResponseWriter, r *http.Request) {
-	credentials, err := c.config.Manager.CompleteFlow(r.Context(), r.URL.String())
-	if err == nil {
-		err = c.refreshModels(r.Context())
-	}
+	credentials, err := c.completeFlow(c.config.Manager, r.URL.String())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -218,6 +222,45 @@ func (c *chatGPTAuthController) handleLoopbackCallback(w http.ResponseWriter, r 
 	}
 	fmt.Fprintf(w, "<!doctype html><title>Signed in to Shelley</title><h1>Signed in</h1><p>ChatGPT account %s is now available in Shelley. You can close this tab.</p>", html.EscapeString(credentials.AccountID))
 	go c.closeCallbackListener()
+}
+
+func (c *chatGPTAuthController) completeFlow(manager *chatgptauth.Manager, callbackURL string) (chatgptauth.Credentials, error) {
+	c.transitionMu.Lock()
+	defer c.transitionMu.Unlock()
+
+	// OAuth completion must outlive the browser callback request. Once the code
+	// exchange starts, credentials and the model catalog become one transition.
+	ctx, cancel := context.WithTimeout(context.Background(), chatGPTAuthUpdateTimeout)
+	defer cancel()
+	credentials, err := manager.CompleteFlow(ctx, callbackURL)
+	if err != nil {
+		return chatgptauth.Credentials{}, err
+	}
+	if err := c.refreshModels(ctx); err != nil {
+		return chatgptauth.Credentials{}, &chatGPTModelRefreshError{err: err}
+	}
+	return credentials, nil
+}
+
+func (c *chatGPTAuthController) credentials(ctx context.Context, manager *chatgptauth.Manager) (chatgptauth.Credentials, error) {
+	c.transitionMu.Lock()
+	defer c.transitionMu.Unlock()
+	return manager.Credentials(ctx)
+}
+
+func (c *chatGPTAuthController) logout(manager *chatgptauth.Manager) error {
+	c.transitionMu.Lock()
+	defer c.transitionMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), chatGPTAuthUpdateTimeout)
+	defer cancel()
+	if err := manager.Logout(ctx); err != nil {
+		return err
+	}
+	if err := c.refreshModels(ctx); err != nil {
+		return fmt.Errorf("signed out, but model refresh failed: %w", err)
+	}
+	return nil
 }
 
 func (c *chatGPTAuthController) resetCallbackTimerLocked() {

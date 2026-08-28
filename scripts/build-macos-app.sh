@@ -11,7 +11,7 @@ case "$ARCH" in
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
 
-for TOOL in rsvg-convert iconutil plutil lipo ditto; do
+for TOOL in rsvg-convert iconutil plutil lipo ditto xcrun; do
     if ! command -v "$TOOL" >/dev/null 2>&1; then
         echo "Required macOS app build tool is missing: $TOOL" >&2
         exit 1
@@ -52,9 +52,19 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$WORK_DIR/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 sed "s/__VERSION__/$VERSION/g" "$PKG_DIR/Info.plist" > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
-cp "$PKG_DIR/launcher.sh" "$APP/Contents/MacOS/Shelley"
 cp "$BINARY" "$APP/Contents/MacOS/shelley-server"
-chmod +x "$APP/Contents/MacOS/Shelley" "$APP/Contents/MacOS/shelley-server"
+chmod +x "$APP/Contents/MacOS/shelley-server"
+xcrun --sdk macosx swiftc \
+    -O \
+    -parse-as-library \
+    -target "$LIPO_ARCH-apple-macos11.0" \
+    -framework AppKit \
+    "$PKG_DIR/launcher.swift" \
+    -o "$APP/Contents/MacOS/Shelley"
+if ! lipo "$APP/Contents/MacOS/Shelley" -verify_arch "$LIPO_ARCH"; then
+    echo "Native launcher does not contain the requested $ARCH architecture" >&2
+    exit 1
+fi
 
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$OUTPUT_DIR/Shelley.app"
